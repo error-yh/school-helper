@@ -1,0 +1,4 @@
+courseKey,meetingKey,name,kind,dayOfWeek,weeks,sections,dates,startTime,endTime,teacher,room,group,experimentProject,isExperiment,exceptionKind,originalDate,targetDate
+demo-a,m1,示例数学,RECURRING,1,"1,3,5,8",1-2,,,,示例教师,示例室A,,,false,,,
+demo-a,m1,,,,,,,,,,,,,,CANCEL,2026-09-21,
+demo-b,m1,"示例实验，项目甲",DATE_SPECIFIC,,,,2026-12-30;2027-01-06,14:00,16:00,,示例室B,第一组,项目甲,true,,,

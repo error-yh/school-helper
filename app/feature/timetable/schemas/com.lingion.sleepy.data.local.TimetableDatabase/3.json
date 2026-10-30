@@ -1,0 +1,852 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "ec2275683cab640110ff5560edf89e00",
+    "entities": [
+      {
+        "tableName": "courses",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `courseName` TEXT NOT NULL, `day` INTEGER NOT NULL, `startNode` INTEGER NOT NULL, `step` INTEGER NOT NULL, `startWeek` INTEGER NOT NULL, `endWeek` INTEGER NOT NULL, `type` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "courseName",
+            "columnName": "courseName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "day",
+            "columnName": "day",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startNode",
+            "columnName": "startNode",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "step",
+            "columnName": "step",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startWeek",
+            "columnName": "startWeek",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endWeek",
+            "columnName": "endWeek",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "semesters",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `name` TEXT NOT NULL, `startEpochDay` INTEGER, `totalWeeks` INTEGER NOT NULL, `revision` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startEpochDay",
+            "columnName": "startEpochDay",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalWeeks",
+            "columnName": "totalWeeks",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "periods",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`semesterId` INTEGER NOT NULL, `number` INTEGER NOT NULL, `startMinute` INTEGER NOT NULL, `endMinute` INTEGER NOT NULL, PRIMARY KEY(`semesterId`, `number`), FOREIGN KEY(`semesterId`) REFERENCES `semesters`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "semesterId",
+            "columnName": "semesterId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "number",
+            "columnName": "number",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startMinute",
+            "columnName": "startMinute",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endMinute",
+            "columnName": "endMinute",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "semesterId",
+            "number"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_periods_semesterId",
+            "unique": false,
+            "columnNames": [
+              "semesterId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_periods_semesterId` ON `${TABLE_NAME}` (`semesterId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "semesters",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "semesterId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "scheduled_courses",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `semesterId` INTEGER NOT NULL, `courseName` TEXT NOT NULL, `teacher` TEXT NOT NULL, `room` TEXT NOT NULL, `color` INTEGER NOT NULL, `sourceCourseCode` TEXT, `sourceClassCode` TEXT, FOREIGN KEY(`semesterId`) REFERENCES `semesters`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "semesterId",
+            "columnName": "semesterId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "courseName",
+            "columnName": "courseName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "teacher",
+            "columnName": "teacher",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "room",
+            "columnName": "room",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "color",
+            "columnName": "color",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceCourseCode",
+            "columnName": "sourceCourseCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceClassCode",
+            "columnName": "sourceClassCode",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_scheduled_courses_semesterId",
+            "unique": false,
+            "columnNames": [
+              "semesterId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_scheduled_courses_semesterId` ON `${TABLE_NAME}` (`semesterId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "semesters",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "semesterId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "course_meetings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `courseId` INTEGER NOT NULL, `day` INTEGER NOT NULL, `customStartMinute` INTEGER, `customEndMinute` INTEGER, `teacher` TEXT, `room` TEXT, `kind` TEXT NOT NULL DEFAULT 'RECURRING', `experimentProject` TEXT, `group` TEXT, `isExperiment` INTEGER NOT NULL DEFAULT 0, FOREIGN KEY(`courseId`) REFERENCES `scheduled_courses`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "courseId",
+            "columnName": "courseId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "day",
+            "columnName": "day",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "customStartMinute",
+            "columnName": "customStartMinute",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "customEndMinute",
+            "columnName": "customEndMinute",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "teacher",
+            "columnName": "teacher",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "room",
+            "columnName": "room",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'RECURRING'"
+          },
+          {
+            "fieldPath": "experimentProject",
+            "columnName": "experimentProject",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "group",
+            "columnName": "group",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isExperiment",
+            "columnName": "isExperiment",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_course_meetings_courseId",
+            "unique": false,
+            "columnNames": [
+              "courseId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_course_meetings_courseId` ON `${TABLE_NAME}` (`courseId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "scheduled_courses",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "courseId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "meeting_weeks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`meetingId` INTEGER NOT NULL, `week` INTEGER NOT NULL, PRIMARY KEY(`meetingId`, `week`), FOREIGN KEY(`meetingId`) REFERENCES `course_meetings`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "meetingId",
+            "columnName": "meetingId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week",
+            "columnName": "week",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "meetingId",
+            "week"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_meeting_weeks_meetingId",
+            "unique": false,
+            "columnNames": [
+              "meetingId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_meeting_weeks_meetingId` ON `${TABLE_NAME}` (`meetingId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "course_meetings",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "meetingId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "meeting_sections",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`meetingId` INTEGER NOT NULL, `section` INTEGER NOT NULL, PRIMARY KEY(`meetingId`, `section`), FOREIGN KEY(`meetingId`) REFERENCES `course_meetings`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "meetingId",
+            "columnName": "meetingId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "section",
+            "columnName": "section",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "meetingId",
+            "section"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_meeting_sections_meetingId",
+            "unique": false,
+            "columnNames": [
+              "meetingId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_meeting_sections_meetingId` ON `${TABLE_NAME}` (`meetingId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "course_meetings",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "meetingId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "meeting_dates",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`meetingId` INTEGER NOT NULL, `epochDay` INTEGER NOT NULL, PRIMARY KEY(`meetingId`, `epochDay`), FOREIGN KEY(`meetingId`) REFERENCES `course_meetings`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "meetingId",
+            "columnName": "meetingId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epochDay",
+            "columnName": "epochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "meetingId",
+            "epochDay"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_meeting_dates_meetingId",
+            "unique": false,
+            "columnNames": [
+              "meetingId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_meeting_dates_meetingId` ON `${TABLE_NAME}` (`meetingId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "course_meetings",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "meetingId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "meeting_declared_weeks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`meetingId` INTEGER NOT NULL, `week` INTEGER NOT NULL, PRIMARY KEY(`meetingId`, `week`), FOREIGN KEY(`meetingId`) REFERENCES `course_meetings`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "meetingId",
+            "columnName": "meetingId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week",
+            "columnName": "week",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "meetingId",
+            "week"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_meeting_declared_weeks_meetingId",
+            "unique": false,
+            "columnNames": [
+              "meetingId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_meeting_declared_weeks_meetingId` ON `${TABLE_NAME}` (`meetingId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "course_meetings",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "meetingId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "meeting_exceptions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `meetingId` INTEGER NOT NULL, `kind` TEXT NOT NULL, `originalEpochDay` INTEGER, `targetEpochDay` INTEGER, `customStartMinute` INTEGER, `customEndMinute` INTEGER, `hasSectionsOverride` INTEGER NOT NULL, `teacher` TEXT, `room` TEXT, `experimentProject` TEXT, `group` TEXT, FOREIGN KEY(`meetingId`) REFERENCES `course_meetings`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "meetingId",
+            "columnName": "meetingId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "originalEpochDay",
+            "columnName": "originalEpochDay",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "targetEpochDay",
+            "columnName": "targetEpochDay",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "customStartMinute",
+            "columnName": "customStartMinute",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "customEndMinute",
+            "columnName": "customEndMinute",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "hasSectionsOverride",
+            "columnName": "hasSectionsOverride",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "teacher",
+            "columnName": "teacher",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "room",
+            "columnName": "room",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "experimentProject",
+            "columnName": "experimentProject",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "group",
+            "columnName": "group",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_meeting_exceptions_meetingId",
+            "unique": false,
+            "columnNames": [
+              "meetingId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_meeting_exceptions_meetingId` ON `${TABLE_NAME}` (`meetingId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "course_meetings",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "meetingId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "exception_sections",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`exceptionId` INTEGER NOT NULL, `section` INTEGER NOT NULL, PRIMARY KEY(`exceptionId`, `section`), FOREIGN KEY(`exceptionId`) REFERENCES `meeting_exceptions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "exceptionId",
+            "columnName": "exceptionId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "section",
+            "columnName": "section",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "exceptionId",
+            "section"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_exception_sections_exceptionId",
+            "unique": false,
+            "columnNames": [
+              "exceptionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_exception_sections_exceptionId` ON `${TABLE_NAME}` (`exceptionId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "meeting_exceptions",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "exceptionId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "schedule_provenance",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `courseId` INTEGER, `meetingId` INTEGER, `exceptionId` INTEGER, `position` INTEGER NOT NULL, `sourceId` TEXT, `adapterId` TEXT, `page` INTEGER, `left` REAL, `top` REAL, `right` REAL, `bottom` REAL, `rawText` TEXT NOT NULL, `sourceLocator` TEXT, FOREIGN KEY(`courseId`) REFERENCES `scheduled_courses`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`meetingId`) REFERENCES `course_meetings`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`exceptionId`) REFERENCES `meeting_exceptions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "courseId",
+            "columnName": "courseId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "meetingId",
+            "columnName": "meetingId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "exceptionId",
+            "columnName": "exceptionId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "sourceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "adapterId",
+            "columnName": "adapterId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "page",
+            "columnName": "page",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "left",
+            "columnName": "left",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "top",
+            "columnName": "top",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "right",
+            "columnName": "right",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "bottom",
+            "columnName": "bottom",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "rawText",
+            "columnName": "rawText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceLocator",
+            "columnName": "sourceLocator",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_schedule_provenance_courseId_position",
+            "unique": true,
+            "columnNames": [
+              "courseId",
+              "position"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_schedule_provenance_courseId_position` ON `${TABLE_NAME}` (`courseId`, `position`)"
+          },
+          {
+            "name": "index_schedule_provenance_meetingId_position",
+            "unique": true,
+            "columnNames": [
+              "meetingId",
+              "position"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_schedule_provenance_meetingId_position` ON `${TABLE_NAME}` (`meetingId`, `position`)"
+          },
+          {
+            "name": "index_schedule_provenance_exceptionId_position",
+            "unique": true,
+            "columnNames": [
+              "exceptionId",
+              "position"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_schedule_provenance_exceptionId_position` ON `${TABLE_NAME}` (`exceptionId`, `position`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "scheduled_courses",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "courseId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "course_meetings",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "meetingId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "meeting_exceptions",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "exceptionId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ec2275683cab640110ff5560edf89e00')"
+    ]
+  }
+}

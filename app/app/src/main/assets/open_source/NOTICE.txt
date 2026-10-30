@@ -1,0 +1,19 @@
+# 校园助手：来源、修改与许可
+
+本集成程序基于 njpemo/mashangqu (MIT) 与 lingion/sleepy (GPL-3.0)。组合程序按根目录GPL-3.0条款分发；原MIT文件保留其原MIT授权及Copyright (c) 2026 njpemo。原作者的许可文本保存在LICENSES/，不构成MIT/GPL任选双许可。
+
+固定来源：
+- https://github.com/njpemo/mashangqu commit e5245ed6a7cbc5a60b139dc4d9acda23b13bc2a9
+- https://github.com/lingion/sleepy commit 3dafa110f74ac4f32464ce1efddb24197a4091d9
+
+修改日期：2026-10-23。校园助手贡献者修改了宿主身份/更新策略/导航，加入最小独立课表模块。Sleepy贡献者的周次判断及SectionHeader组件经过最小摘取；逐文件来源、范围与修改见docs/stage-1/migration-manifest.csv。没有迁入Sleepy的Application、Activity、导航、更新器、OEM、小组件、地图或采集器。
+
+阶段2修改（2026-10-23）：在相同固定Sleepy来源下适配LocalDate周计算、默认作息数值、今日卡片/周网格布局及多安排编辑模式；新建精确集合模型、Room v2及事务仓库和宿主适配。逐文件来源与修改范围见docs/stage-2/migration-manifest.csv。新增部分不沿用Sleepy原数据库版本，不引入其独立App及更新机制；原MIT和GPL许可与作者版权继续保留。
+
+未来分发APK时，须在同一Release提供该版本完整对应源码、构建说明、必要脚本/资源及许可；仅提供原仓库地址不足。本开发阶段没有发布APK，正式签名/自有更新源未启用，未配置签名的Release构建拒绝执行。原作者名称不表示对校园助手的认可。
+
+阶段3 PDF提取依赖（2026-10-24）：com.tom-roush:pdfbox-android:2.0.27.0（Apache-2.0），固定上游 https://github.com/TomRoush/PdfBox-Android/tree/v2.0.27.0 。同目录Apache-2.0-pdfbox-android.txt及NOTICE-pdfbox-android.txt包含完整原许可、附带第三方条款和原NOTICE。新增PDF解析器独立于现有Room/UI导入接口。
+
+阶段3矩阵单元格范围判定（2026-10-30）：参考并适配pdfplumber的四边连通/最小单元格判定（Jeremy Singer-Vine，MIT），固定 https://github.com/jsvine/pdfplumber/blob/4c64b92d5caccd71c645e98e0fabb0c4dba7ff45/pdfplumber/table.py 的intersections_to_cells；复用本工程已有的有界表格线检测与四边搜索，不引入Python运行时、pdfplumber整库或其PDF解析栈。完整MIT原许可见同目录MIT-pdfplumber.txt及仓库LICENSES/MIT-pdfplumber.txt。
+
+阶段3本地图片OCR正式接线（2026-10-30）：复用hzkitty/RapidOCR4j-Android固定8e11959786c0fe609c68f4b133ee3210940a0df8源码与原PaddleOCR模型，OpenCV 4.9.0及ONNX Runtime Android 1.18.0。原文件和生命周期修订保存在src/rapidTrial目录，由main源集显式引用；目录名不表示仅测试。未改识别数学或训练模型；本地适配负责布局、模型哈希/原子安装、输入预算和资源关闭。完整原作者版权及Apache-2.0、Clipper Boost、ONNX Runtime MIT许可在ocr/rapid/LICENSE-*.txt中，应用开源许可页可读。逐文件清单见docs/stage-3/rapidocr-trial-source-manifest.csv；正式接线状态及限制见rapidocr-production-integration.md。无图片上传或第三方云识别。
