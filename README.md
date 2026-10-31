@@ -1,5 +1,9 @@
 # 校园助手 Android
 
+**[下载 Android 安装包（APK）](https://github.com/error-yh/school-helper/releases/download/stage4-ui-groups-preview-20261101/school-helper-stage4-ui-groups-preview-debug.apk)** · [版本说明、源码及校验文件](https://github.com/error-yh/school-helper/releases/tag/stage4-ui-groups-preview-20261101)
+
+当前为阶段4联合测试版（约267 MiB，Debug签名）。安装包不包含个人课表或账号数据；不要把绿色“Code”按钮下载的源码 ZIP 当作安装包。
+
 在码上取宿主中模块化加入课表，使用Kotlin、Jetpack Compose、Room及Hilt。保留快递、身份码与登录入口，支持本地课程管理、今日/本周及PDF、图片、文字通知导入。
 
 ## 当前预览版
