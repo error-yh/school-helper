@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,7 +62,10 @@ import com.aggapp.core.model.Platform
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MineScreen(vm: MineViewModel = hiltViewModel()) {
+fun MineScreen(
+    onOpenSourceClick: () -> Unit = {},
+    vm: MineViewModel = hiltViewModel(),
+) {
     val state by vm.state.collectAsState()
     val context = LocalContext.current
 
@@ -118,7 +122,7 @@ fun MineScreen(vm: MineViewModel = hiltViewModel()) {
                 Modifier.padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-            SchoolHelperAbout()
+
             // ===== 顶部：5 平台登录态总览（点击展开对应登录表单）=====
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Platform.entries.forEach { p ->
@@ -502,6 +506,15 @@ fun MineScreen(vm: MineViewModel = hiltViewModel()) {
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
             ) { Text("导出调试日志（操作/请求/登录态）") }
+
+            // ===== 开源许可与说明入口 =====
+            OutlinedButton(
+                onClick = onOpenSourceClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("mine-open-source-entry"),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text("开源许可与说明") }
 
             // 淘宝多账号选择弹窗（手机号绑定多个淘宝账号，登录前需选择）
             if (state.tbAccounts.isNotEmpty()) {

@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -19,6 +20,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lingion.sleepy.api.TimetableDependencies
+import com.lingion.sleepy.data.CourseDisplayGroupKey
+import com.lingion.sleepy.data.SharedPreferencesCourseDisplayGroupStore
 import com.lingion.sleepy.domain.TimetableRules
 import com.lingion.sleepy.domain.formatNumberSet
 import com.lingion.sleepy.domain.model.ScheduledCourse
@@ -83,8 +86,102 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
         editorSession++; editorOpen = true
     }
     val settingsStateHolder=rememberSaveableStateHolder()
+    // Keeps the course card expansion state while the tab is not composed.
+    val courseStateHolder=rememberSaveableStateHolder()
     var periodEditorOpen by rememberSaveable {mutableStateOf(false)}
     val canWrite = !state.isSaving && !state.isLoading && !state.hasReadError
+    // Display-only grouping: a separate preference file, never part of the timetable database.
+    val appContext = LocalContext.current.applicationContext
+    val displayGroupStore = remember(appContext) { SharedPreferencesCourseDisplayGroupStore(appContext) }
+    val displayGroupScope = rememberCoroutineScope()
+    val displayGroupKey = CourseDisplayGroupKey(state.snapshot.scopeToken, state.snapshot.settings.id)
+    val groupSession = remember(displayGroupStore, displayGroupScope) {
+        CourseDisplayGroupSession(displayGroupStore, displayGroupScope, initialKey = displayGroupKey)
+    }
+    LaunchedEffect(groupSession, displayGroupKey) { groupSession.activate(displayGroupKey) }
+    val groupsState by groupSession.state.collectAsStateWithLifecycle()
+    // A display/maintenance view is only valid for the scope and generation it was computed for.
+    val manualView = remember(
+        displayGroupKey,
+        groupsState.loaded,
+        groupsState.loadedKey,
+        groupsState.generation,
+        groupsState.groups,
+        state.snapshot.courses,
+        state.snapshot.revision,
+        state.isLoading,
+        state.hasReadError,
+    ) {
+        manualGroupView(
+            loaded = groupsState.loaded,
+            loadedKey = groupsState.loadedKey,
+            generation = groupsState.generation,
+            groups = groupsState.groups,
+            currentKey = displayGroupKey,
+            courses = state.snapshot.courses,
+            snapshotRevision = state.snapshot.revision,
+            unavailable = state.isLoading || state.hasReadError,
+        )
+    }
+    var groupEditorOpen by rememberSaveable { mutableStateOf(false) }
+    var groupEditorTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    // The write scope is captured when the organizer opens, so a later scope switch or reload cannot
+    // apply this editor's selection to another scope's configuration.
+    var editorScopeToken by rememberSaveable { mutableStateOf<String?>(null) }
+    var editorSemester by rememberSaveable { mutableStateOf(0L) }
+    var editorGeneration by rememberSaveable { mutableStateOf(-1L) }
+    fun editorWriteScope(): GroupWriteScope? {
+        val capturedToken = editorScopeToken ?: return null
+        val capturedGeneration = editorGeneration
+        if (capturedGeneration < 0) return null
+        return GroupWriteScope(CourseDisplayGroupKey(capturedToken, editorSemester), capturedGeneration)
+    }
+    // Deleted or replaced records are cleaned from the stored groups, but only from a successfully
+    // loaded, non-empty snapshot, never while a save is in flight, and at most once per
+    // (scope, generation, snapshot revision) so a failed write cannot loop.
+    val pruneTracker = remember { PruneAttemptTracker() }
+    LaunchedEffect(manualView, groupsState.saving) {
+        val view = manualView ?: return@LaunchedEffect
+        if (groupsState.saving) return@LaunchedEffect
+        if (state.snapshot.revision != view.snapshotRevision) return@LaunchedEffect
+        if (!pruneTracker.begin(view)) return@LaunchedEffect
+        val pruned = pruneInvalidMembers(view.groups, state.snapshot.courses) ?: return@LaunchedEffect
+        groupSession.persistIfCurrent(pruned, view.scope)
+    }
+    LaunchedEffect(groupsState.savedSerial) {
+        if (groupsState.savedSerial > 0) {
+            groupEditorOpen = false
+            groupEditorTarget = null
+        }
+    }
+    if (groupEditorOpen && !state.isLoading && !state.hasReadError) {
+        CourseGroupEditor(
+            snapshot = state.snapshot,
+            groups = groupsState.groups,
+            initialGroupId = groupEditorTarget,
+            saving = groupsState.saving,
+            error = groupsState.error,
+            enabled = canWrite,
+            onSave = { editingGroupId, name, courseIds, allowMove ->
+                groupSession.saveGroup(
+                    editingGroupId = editingGroupId,
+                    name = name,
+                    courseIds = courseIds,
+                    courses = state.snapshot.courses,
+                    allowMove = allowMove,
+                    expected = editorWriteScope(),
+                )
+            },
+            onRemoveGroup = { groupSession.removeGroup(it, editorWriteScope()) },
+            onDismiss = {
+                if (!groupsState.saving) {
+                    groupEditorOpen = false
+                    groupEditorTarget = null
+                }
+            },
+        )
+        return
+    }
     if(periodEditorOpen && !state.isLoading && !state.hasReadError) {
         PeriodTableEditor(state.snapshot,canWrite,state.isSaving,state.errorMessage,model::saveSettings) {periodEditorOpen=false}
         return
@@ -141,8 +238,27 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
                         onDate = { browsingDate = it?.toString() }, onCourse = { selectedId = it.id })
                     1 -> WeekPane(state.snapshot, monday,
                         onMonday = { browsingMonday = it?.toString() }, onCourse = { selectedId = it.id })
-                    2 -> CourseManagementPane(state.snapshot, canWrite,
-                        onAdd = { openEditor(null) }, onCourse = { selectedId = it.id })
+                    2 -> courseStateHolder.SaveableStateProvider("courses") {
+                        CourseManagementPane(
+                            snapshot = state.snapshot,
+                            enabled = canWrite,
+                            organizeEnabled = canWrite && !groupsState.loading && (groupsState.loaded || groupsState.error != null),
+                            manualGroups = manualView?.reconcile?.effective.orEmpty(),
+                            groupsError = groupsState.error,
+                            onAdd = { openEditor(null) },
+                            onOrganize = {
+                                model.clearMessage()
+                                groupEditorTarget = null
+                                val writeScope = groupSession.currentWriteScope
+                                editorScopeToken = writeScope?.key?.scopeToken
+                                editorSemester = writeScope?.key?.semesterId ?: 0L
+                                editorGeneration = writeScope?.generation ?: -1L
+                                groupEditorOpen = true
+                            },
+                            onRetryGroups = { groupSession.retry() },
+                            onCourse = { selectedId = it.id },
+                        )
+                    }
                     3 -> settingsStateHolder.SaveableStateProvider("semester") {
                         SettingsEditor(state.snapshot, canWrite, state.isSaving, state.errorMessage,
                         onSave = model::saveSettings,onEditPeriods={model.clearMessage();periodEditorOpen=true})
