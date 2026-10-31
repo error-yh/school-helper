@@ -7,9 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -21,11 +19,13 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
 
 private data class TabItem(val route: String, val label: String, val icon: @Composable () -> Unit)
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun AggScaffold(navController: NavHostController, timetableDependencies: TimetableDependencies) {
     val tabs = listOf(
@@ -64,9 +65,13 @@ fun AggScaffold(navController: NavHostController, timetableDependencies: Timetab
     )
     val backStack by navController.currentBackStackEntryAsState()
     val current = backStack?.destination?.route ?: "timetable"
-    val selectedTab = current
+    val selectedTab = when (current) {
+        "open-source" -> "mine"
+        else -> current
+    }
 
     Scaffold(
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         containerColor = androidx.compose.material3.MaterialTheme.colorScheme.background,
         bottomBar = {
             NavigationBar {
@@ -75,7 +80,9 @@ fun AggScaffold(navController: NavHostController, timetableDependencies: Timetab
                         modifier = Modifier.testTag("nav-${tab.route}"),
                         selected = selectedTab == tab.route,
                         onClick = {
-                            if (current != tab.route) {
+                            if (tab.route == "mine" && current == "open-source") {
+                                navController.popBackStack("mine", inclusive = false)
+                            } else if (current != tab.route) {
                                 navController.navigate(tab.route) {
                                     popUpTo(navController.graph.startDestinationId) { saveState = true }
                                     launchSingleTop = true
@@ -102,20 +109,8 @@ fun AggScaffold(navController: NavHostController, timetableDependencies: Timetab
         ) {
             composable("timetable") { TimetableRoute(timetableDependencies) }
             composable("express") {
-                Column(Modifier.fillMaxSize().testTag("express-page")) {
-                    TextButton(
-                        onClick = {
-                            if (current != "idcode") {
-                                navController.navigate("idcode") {
-                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("身份码") }
-                    Box(Modifier.weight(1f)) { ExpressScreen() }
+                Box(Modifier.fillMaxSize().testTag("express-page")) {
+                    ExpressScreen()
                 }
             }
             composable("idcode") {
@@ -123,7 +118,22 @@ fun AggScaffold(navController: NavHostController, timetableDependencies: Timetab
                     IdCodeScreen(hiltViewModel<MainViewModel>())
                 }
             }
-            composable("mine") { MineScreen() }
+            composable("mine") {
+                MineScreen(
+                    onOpenSourceClick = {
+                        if (current != "open-source") {
+                            navController.navigate("open-source") {
+                                launchSingleTop = true
+                            }
+                        }
+                    },
+                )
+            }
+            composable("open-source") {
+                OpenSourceLicensesScreen(
+                    onBack = { navController.popBackStack() },
+                )
+            }
         }
     }
 }

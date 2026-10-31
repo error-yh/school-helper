@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -210,33 +211,42 @@ internal fun WeekPane(
 }
 
 @Composable
-internal fun CourseManagementPane(snapshot: TimetableSnapshot, enabled: Boolean, onAdd: () -> Unit, onCourse: (ScheduledCourse) -> Unit) {
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("全部课程 · ${snapshot.courses.size}", style = MaterialTheme.typography.titleMedium)
-            Button(onClick = onAdd, enabled = enabled) { Text("新增课程") }
-        }
-        LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (snapshot.courses.isEmpty()) item { Text("还没有课程，点击新增课程录入真实安排。") }
-            items(snapshot.courses, key = { it.id }) { course ->
-                Card(onClick = { onCourse(course) }, modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(course.courseName, Modifier.clickable { onCourse(course) }, style = MaterialTheme.typography.titleMedium)
-                        if (course.teacher.isNotBlank()) Text(course.teacher)
-                        if (course.room.isNotBlank()) Text(course.room)
-                        course.meetings.forEach { meeting ->
-                            Text(meetingScheduleSummary(meeting))
-                            meeting.experimentProject?.takeIf { it.isNotBlank() }?.let { Text("项目：$it") }
-                            meeting.group?.takeIf { it.isNotBlank() }?.let { Text("分组：$it") }
-                            if (meeting.exceptions.isNotEmpty()) Text("含 ${meeting.exceptions.size} 条停课、调课或加课记录")
-                            if (meeting.kind != MeetingKind.UNSCHEDULED && meeting.customTime == null && meeting.sections.any { number -> snapshot.periods.none { it.number == number } }) {
-                                Text("含未定位节次，请补充作息或编辑课程。", color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
-                }
-            }
-        }
+internal fun CourseManagementPane(
+    snapshot: TimetableSnapshot,
+    enabled: Boolean,
+    organizeEnabled: Boolean,
+    manualGroups: List<EffectiveManualGroup>,
+    groupsError: String?,
+    onAdd: () -> Unit,
+    onOrganize: () -> Unit,
+    onRetryGroups: () -> Unit,
+    onCourse: (ScheduledCourse) -> Unit,
+) {
+    val projection = remember(snapshot, manualGroups) { projectCourseManagement(snapshot, manualGroups) }
+    // Expansion is display state only: keyed by the database scope and semester, and saved so a
+    // tab/bottom-bar round trip or a recreation does not lose which cards were open.
+    var expanded by rememberSaveable(
+        snapshot.scopeToken,
+        snapshot.settings.id,
+        stateSaver = ExpandedCourseGroupKeys,
+    ) { mutableStateOf(emptySet<String>()) }
+    val groupKeys = remember(projection) { projection.groups.map { it.key }.toSet() }
+    // A re-projected list (add/edit/delete) must not leave a ghost key behind.
+    LaunchedEffect(groupKeys) {
+        val kept = expanded.intersect(groupKeys)
+        if (kept.size != expanded.size) expanded = kept
     }
+    CourseManagementList(
+        projection = projection,
+        enabled = enabled,
+        organizeEnabled = organizeEnabled,
+        expandedKeys = expanded,
+        onAdd = onAdd,
+        onOrganize = onOrganize,
+        onToggleGroup = { key -> expanded = if (key in expanded) expanded - key else expanded + key },
+        onDetails = onCourse,
+        groupsError = groupsError,
+        onRetryGroups = onRetryGroups,
+    )
 }
 private fun LocalTime.minutes() = hour * 60 + minute

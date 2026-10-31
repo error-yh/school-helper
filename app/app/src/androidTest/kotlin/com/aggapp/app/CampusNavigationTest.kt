@@ -42,21 +42,43 @@ class CampusNavigationTest {
 
     @Test(timeout = 90_000) fun timetableExpressIdentityAndMineAreReachable() {
         click("快递")
-        waitForText("身份码")
-        // 快递页快捷入口提升为一级身份码导航（移除原嵌套“返回快递”）
-        click("身份码")
+        waitForExpressPage()
+        // 快递顶部重复“身份码”已清除，express-page 内部不应包含“身份码”控件
+        assertNoIdentityCodeInExpressPage()
+
+        // 底栏一级“身份码”Tab 独立可达并正确定位
+        clickBottomTab("idcode")
         waitForIdCodeScreen()
+
         click("我的")
         waitForText("平台登录与账号管理")
-        waitForText(AppUpdate.statusMessage)
-        click("码上取 · MIT 许可")
+        // 我的页面顶部大许可卡片已移除
+        assertFalse("Top about card must be removed from mine screen", visibleTextContains("码上取 · MIT 许可"))
+
+        // 滚到底部点击简洁入口进入独立的开源许可与说明页
+        scrollToAndClick("开源许可与说明")
+        waitForText("开源许可与说明")
+        waitForCondition("App update status is visible") {
+            visibleTextContains(AppUpdate.statusMessage)
+        }
+
+        // 小屏适配：滚动定位并点击许可项，验证全文弹窗离线展示
+        scrollToAndClick("码上取 · MIT 许可")
         waitForText("码上取 · MIT 许可")
         waitForCondition("MIT copyright is bundled and displayed") {
             visibleTextContains("Copyright (c) 2026 njpemo")
         }
         click("关闭")
-        // 底栏一级“身份码”Tab 独立可达并正确定位
-        click("身份码")
+
+        // 验证系统返回键回到我的页面：断言页面身份与原底部滚动位置恢复（避免顶底视口矛盾）
+        UiDevice.getInstance(instrumentation).pressBack()
+        waitForCondition("Returned to mine screen and restored bottom scroll position") {
+            findNodeByTag("open-source-screen") == null && visibleTextContains("开源许可与说明")
+        }
+        assertTrue("Debug log export button is visible in bottom viewport", visibleTextContains("导出调试日志（操作/请求/登录态）"))
+
+        // 切回身份码与课表
+        clickBottomTab("idcode")
         waitForIdCodeScreen()
         click("课表")
         waitForText("本机课表")
@@ -65,8 +87,9 @@ class CampusNavigationTest {
     @Test(timeout = 90_000) fun fourBottomNavigationTabsCanBeSwitchedRepeatedlyWithoutBreakingState() {
         waitForText("本机课表")
         click("快递")
-        waitForText("身份码")
-        click("身份码")
+        waitForExpressPage()
+        assertNoIdentityCodeInExpressPage()
+        clickBottomTab("idcode")
         waitForIdCodeScreen()
         click("我的")
         waitForText("平台登录与账号管理")
@@ -75,8 +98,9 @@ class CampusNavigationTest {
 
         // 再次完整循环切换，验证重复切页与状态保存恢复稳健
         click("快递")
-        waitForText("身份码")
-        click("身份码")
+        waitForExpressPage()
+        assertNoIdentityCodeInExpressPage()
+        clickBottomTab("idcode")
         waitForIdCodeScreen()
         click("我的")
         waitForText("平台登录与账号管理")
@@ -86,7 +110,7 @@ class CampusNavigationTest {
 
     @Test(timeout = 90_000) fun systemBackFromNonStartTabReturnsToTimetableStartDestination() {
         waitForText("本机课表")
-        click("身份码")
+        clickBottomTab("idcode")
         waitForIdCodeScreen()
         // 一级 Tab 按系统返回键，默认回到起始目的地（课表）
         UiDevice.getInstance(instrumentation).pressBack()
@@ -137,8 +161,6 @@ class CampusNavigationTest {
     }
 
     private fun nodes(text: String): List<AccessibilityNodeInfo> {
-        // Compose virtual nodes are exposed by child traversal; the provider need not implement
-        // AccessibilityNodeProvider.findAccessibilityNodeInfosByText's optional search index.
         val pending = ArrayDeque<AccessibilityNodeInfo>()
         instrumentation.uiAutomation.rootInActiveWindow?.let(pending::add)
         val matches = mutableListOf<AccessibilityNodeInfo>()
@@ -163,6 +185,65 @@ class CampusNavigationTest {
         nodes(text).any { it.text?.toString() == text }
     }
 
+    private fun waitForExpressPage() = waitForCondition("Express page container is present") {
+        findNodeByTag("express-page") != null
+    }
+
+    private fun assertNoIdentityCodeInExpressPage() {
+        val root = checkNotNull(findNodeByTag("express-page")) { "express-page node not found" }
+        assertFalse(
+            "express-page subtree must not contain duplicate identity code button",
+            hasTextWithinSubtree(root, "身份码"),
+        )
+    }
+
+    private fun findNodeByTag(tag: String): AccessibilityNodeInfo? {
+        val pending = ArrayDeque<AccessibilityNodeInfo>()
+        instrumentation.uiAutomation.rootInActiveWindow?.let(pending::add)
+        var visited = 0
+        while (pending.isNotEmpty()) {
+            check(++visited <= 2_048) { "Unexpectedly large accessibility tree" }
+            val node = pending.removeFirst()
+            val id = node.viewIdResourceName
+            if (id == tag || id?.endsWith(":id/$tag") == true) return node
+            repeat(node.childCount) { index -> node.getChild(index)?.let(pending::add) }
+        }
+        return null
+    }
+
+    private fun hasTextWithinSubtree(root: AccessibilityNodeInfo, text: String): Boolean {
+        val pending = ArrayDeque<AccessibilityNodeInfo>()
+        pending.add(root)
+        while (pending.isNotEmpty()) {
+            val node = pending.removeFirst()
+            if (node.text?.toString() == text) return true
+            repeat(node.childCount) { index -> node.getChild(index)?.let(pending::add) }
+        }
+        return false
+    }
+
+    private fun clickBottomTab(route: String) {
+        val tag = "nav-$route"
+        val label = when (route) {
+            "timetable" -> "课表"
+            "express" -> "快递"
+            "idcode" -> "身份码"
+            "mine" -> "我的"
+            else -> route
+        }
+        waitForCondition("Bottom navigation tab: $tag or text $label") {
+            val node = findNodeByTag(tag) ?: nodes(label).firstOrNull()
+            if (node != null && node.isEnabled) {
+                var target: AccessibilityNodeInfo? = node
+                while (target != null && !target.isClickable) target = target.parent
+                if (target != null && target.isEnabled) {
+                    return@waitForCondition target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }
+            }
+            false
+        }
+    }
+
     private fun click(text: String) {
         waitForCondition("Fresh clickable control: $text") {
             val candidates = nodes(text).filter { it.text?.toString() == text }
@@ -175,6 +256,39 @@ class CampusNavigationTest {
             }
             false
         }
+    }
+
+    private fun scrollToAndClick(text: String) {
+        val deadline = SystemClock.uptimeMillis() + 15_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            val candidates = nodes(text).filter { it.text?.toString() == text }
+            if (candidates.isNotEmpty()) {
+                for (cand in candidates.reversed()) {
+                    var node: AccessibilityNodeInfo? = cand
+                    while (node != null && !node.isClickable) node = node.parent
+                    if (node != null && node.isEnabled) {
+                        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
+                    }
+                }
+            }
+            val scrollable = findScrollableNode()
+            if (scrollable != null) {
+                scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            }
+            SystemClock.sleep(200)
+        }
+        throw AssertionError("Timed out scrolling to and clicking: $text")
+    }
+
+    private fun findScrollableNode(): AccessibilityNodeInfo? {
+        val pending = ArrayDeque<AccessibilityNodeInfo>()
+        instrumentation.uiAutomation.rootInActiveWindow?.let(pending::add)
+        while (pending.isNotEmpty()) {
+            val node = pending.removeFirst()
+            if (node.isScrollable) return node
+            repeat(node.childCount) { index -> node.getChild(index)?.let(pending::add) }
+        }
+        return null
     }
 
     private fun waitForCondition(description: String, condition: () -> Boolean) {

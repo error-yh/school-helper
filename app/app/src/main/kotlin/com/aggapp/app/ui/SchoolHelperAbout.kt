@@ -27,6 +27,31 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
+fun LicenseDetailDialog(entry: LicenseDocument, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var content by remember(entry) { mutableStateOf("正在读取…") }
+    LaunchedEffect(entry) {
+        content = try {
+            withContext(Dispatchers.IO) {
+                entry.assetPaths.joinToString("\n\n") { path ->
+                    "=== $path ===\n" + context.assets.open(path).bufferedReader().use { it.readText() }
+                }
+            }
+        } catch (_: IOException) {
+            "无法读取许可文本，请查看随源码提供的 LICENSES 目录。"
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(entry.title) },
+        text = {
+            Text(content, Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()))
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+    )
+}
+
+@Composable
 fun SchoolHelperAbout() {
     var document by remember { mutableStateOf<LicenseDocument?>(null) }
     Card(Modifier.fillMaxWidth()) {
@@ -40,35 +65,16 @@ fun SchoolHelperAbout() {
         }
     }
     document?.let { entry ->
-        val context = LocalContext.current
-        var content by remember(entry) { mutableStateOf("正在读取…") }
-        LaunchedEffect(entry) {
-            content = try {
-                withContext(Dispatchers.IO) {
-                    entry.assetPaths.joinToString("\n\n") { path ->
-                        "=== $path ===\n" + context.assets.open(path).bufferedReader().use { it.readText() }
-                    }
-                }
-            } catch (_: IOException) {
-                "无法读取许可文本，请查看随源码提供的 LICENSES 目录。"
-            }
-        }
-        AlertDialog(
-            onDismissRequest = { document = null },
-            title = { Text(entry.title) },
-            text = {
-                Text(content, Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()))
-            },
-            confirmButton = { TextButton(onClick = { document = null }) { Text("关闭") } },
-        )
+        LicenseDetailDialog(entry = entry, onDismiss = { document = null })
     }
 }
 
-private enum class LicenseDocument(val title: String, vararg val assetPaths: String) {
+public enum class LicenseDocument(public val title: String, public vararg val assetPaths: String) {
     NOTICE("开源来源与修改说明", "open_source/NOTICE.txt"),
     MIT("码上取 · MIT 许可", "open_source/MIT-mashangqu.txt"),
     GPL("Sleepy 与组合程序 · GPL-3.0", "open_source/GPL-3.0-sleepy.txt"),
     PDF("PDF 提取组件许可与声明", "open_source/Apache-2.0-pdfbox-android.txt", "open_source/NOTICE-pdfbox-android.txt"),
+    PDFPLUMBER("pdfplumber 提取算法 · MIT 许可", "open_source/MIT-pdfplumber.txt"),
     OCR("离线文字识别组件与模型许可", "ocr/licenses/README.md", "ocr/licenses/wrapper-LICENSE",
         "ocr/licenses/tesseract-LICENSE", "ocr/licenses/tessdata-LICENSE", "ocr/licenses/leptonica-license",
         "ocr/licenses/libjpeg-README", "ocr/licenses/libpng-LICENSE",
