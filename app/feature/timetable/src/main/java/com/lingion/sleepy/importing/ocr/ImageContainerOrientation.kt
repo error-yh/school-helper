@@ -37,14 +37,11 @@ internal object ImageContainerOrientation {
             if (length < 0 || length.toLong() > reader.remaining) invalid()
             if (marker == 218) {
                 reader.skip(length.toLong())
-                // EOI need not be the final file bytes: downloaded JPEGs can carry a
-                // transport footer. Inspect only a bounded suffix for the marker; this
-                // is not entropy validation. BitmapFactory still decodes the pixels.
-                if (reader.remaining < 2) invalid()
-                val suffixLength = minOf(reader.remaining, MAX_METADATA.toLong()).toInt()
-                reader.skip(reader.remaining-suffixLength)
-                val suffix = reader.bytes(suffixLength)
-                if ((0 until suffix.lastIndex).none { suffix[it] == (-1).toByte() && suffix[it+1] == (-39).toByte() }) invalid()
+                // Chat/transport copies routinely drop the two-byte end-of-image marker while the
+                // platform still decodes the declared raster. This reader never validated entropy,
+                // so a completed scan is enough; the decoder still has to produce exactly the
+                // declared ARGB raster. Only the marker structure must stay in bounds.
+                if (reader.remaining < 1) invalid()
                 return orientation
             }
             if (marker == 225 && length >= 6) {
@@ -113,8 +110,11 @@ internal object ImageContainerOrientation {
             val position = (offset + 2 + entry*12L).toInt()
             if (u16(position) != 274) continue
             if (found || u16(position+2) != 3 || u32(position+4) != 1L) invalid()
-            found = true; orientation = u16(position+8)
-            if (orientation !in 1..8) invalid()
+            found = true
+            // EXIF defines only 1..8. Encoders that emit 0 (or anything else) mean "undefined";
+            // identity keeps the real pixels instead of rejecting a decodable image.
+            val declared = u16(position+8)
+            orientation = if (declared in 1..8) declared else 1
         }
         return orientation
     }

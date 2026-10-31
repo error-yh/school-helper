@@ -18,7 +18,9 @@ class ImageContainerOrientationTest {
     private fun jpeg(vararg payload: ByteArray): ByteArray = ByteArrayOutputStream().apply {
         write(byteArrayOf(-1,-40))
         payload.forEach { val bytes="Exif\u0000\u0000".toByteArray()+it;write(byteArrayOf(-1,-31,(bytes.size+2 ushr 8).toByte(),(bytes.size+2).toByte()));write(bytes) }
-        write(byteArrayOf(-1,-38,0,2,-1,-39))
+        write(byteArrayOf(-1,-38,0,2))
+        write(ByteArray(16) { 0x5a })
+        write(byteArrayOf(-1,-39))
     }.toByteArray()
     private fun chunk(name: String,data: ByteArray): ByteArray = ByteBuffer.allocate(data.size+12).apply {
         val type=name.toByteArray();putInt(data.size);put(type);put(data)
@@ -26,16 +28,21 @@ class ImageContainerOrientationTest {
     }.array()
     private fun png(vararg payload: ByteArray): ByteArray = byteArrayOf(-119,80,78,71,13,10,26,10)+chunk("IHDR",ByteArray(13))+payload.fold(byteArrayOf()) { a,b -> a+chunk("eXIf",b) }+chunk("IEND",byteArrayOf())
     private fun read(bytes: ByteArray): Int = ImageContainerOrientation.read(ByteArrayInputStream(bytes),bytes.size.toLong())
-    @Test fun rejectsMissingJpegEoiTailWithoutTreatingItAsCompleteEntropyValidation() {
+    @Test fun acceptsChatSavedJpegWithoutEoiWhileStructuralGarbageStillRejects() {
         val complete=jpeg(tiff(6))
         assertEquals(6,read(complete))
-        assertThrows(RasterException::class.java) { read(complete.copyOf(complete.size-1)) }
-        assertThrows(RasterException::class.java) { read(complete.copyOf(complete.size-2)) }
+        // Chat/transport copies routinely drop the two-byte end-of-image marker; the platform still
+        // decodes the declared raster, and this reader never claimed to validate entropy.
+        assertEquals(6,read(complete.copyOf(complete.size-1)))
+        assertEquals(6,read(complete.copyOf(complete.size-2)))
         // Provider/transport footers may follow EOI; the platform still owns pixel decoding.
         assertEquals(6,read(complete+byteArrayOf(0)))
-        // This narrow boundary rule deliberately does not decode/validate entropy itself.
         val spoofed=complete.copyOfRange(0,complete.size-2)+byteArrayOf(1,2,3,-1,-39)
         assertEquals(6,read(spoofed))
+        // A header without any scan, and a segment length beyond the file, stay rejected.
+        val headerOnly=complete.copyOfRange(0,complete.size-2)
+        assertThrows(RasterException::class.java) { read(headerOnly.copyOf(2)) }
+        assertThrows(RasterException::class.java) { read(byteArrayOf(-1,-40,-1,-31,127,-1)) }
     }
     @Test fun acceptsTransportFooterAfterJpegEoiWithoutChangingOrientationOrInput() {
         val complete=jpeg(tiff(8))
@@ -44,8 +51,8 @@ class ImageContainerOrientationTest {
         val before=bytes.copyOf()
         assertEquals(8,read(bytes))
         assertArrayEquals(before,bytes)
-        // A footer cannot replace the required end-of-image marker.
-        assertThrows(RasterException::class.java) { read(complete.copyOf(complete.size-2)+footer) }
+        // Dropping EOI keeps the same bounded IFD result; a footer is never parsed as metadata.
+        assertEquals(8,read(complete.copyOf(complete.size-2)+footer))
     }
     @Test fun readsAllEightDirectionsBothContainersAndByteOrdersWithoutMutatingBytes() {
         for (value in 1..8) for (little in listOf(false,true)) for (bytes in listOf(jpeg(tiff(value,little)),png(tiff(value,little)))) {
@@ -53,8 +60,11 @@ class ImageContainerOrientationTest {
         }
         assertEquals(1,read(jpeg()));assertEquals(1,read(png()))
     }
-    @Test fun rejectsInvalidOrientationTypeCountValueAndDuplicateTagOrPayload() {
-        for (payload in listOf(tiff(0),tiff(9),tiff(type=4),tiff(count=2),tiff(count=Int.MAX_VALUE))) {
+    @Test fun readsUndefinedOrientationAsIdentityAndStillRejectsMalformedIfdEntries() {
+        // EXIF defines only 1..8. Encoders that write 0 (or any other value) mean "undefined";
+        // identity preserves the real pixels instead of rejecting a decodable image.
+        for (payload in listOf(tiff(0),tiff(9),tiff(65535))) assertEquals(1,read(jpeg(payload)))
+        for (payload in listOf(tiff(type=4),tiff(count=2),tiff(count=Int.MAX_VALUE))) {
             assertThrows(RasterException::class.java) { read(jpeg(payload)) }
         }
         assertThrows(RasterException::class.java) { read(jpeg(tiff(1),tiff(2))) }

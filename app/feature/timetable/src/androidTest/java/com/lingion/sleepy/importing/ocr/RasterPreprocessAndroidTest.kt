@@ -103,6 +103,24 @@ class RasterPreprocessAndroidTest {
             try { decoder.withDecoded(ByteArrayInputStream(bad),RasterResources(OcrWorkBudget())) { fail("must reject") }; fail("must reject") } catch (e:RasterException) { assertTrue(e.code in setOf(RasterFailure.INVALID_IMAGE,RasterFailure.UNSUPPORTED_FORMAT)) }
         }
     }
+    @Test fun undefinedExifOrientationKeepsTheDeclaredRasterUnrotated() = runBlocking {
+        val expected=listOf(Color.RED,Color.GREEN,Color.BLUE,Color.YELLOW)
+        for (declared in listOf(0,9,0xFFFF)) {
+            val bytes=fixture(Bitmap.CompressFormat.JPEG,declared)
+            val resources=RasterResources(OcrWorkBudget())
+            AndroidImportImageDecoder(context).withDecoded(ByteArrayInputStream(bytes),resources) { decoded ->
+                val b=decoded.page.bitmap
+                assertEquals(90 to 60,b.width to b.height)
+                assertEquals(90f,decoded.page.originalWidth);assertEquals(60f,decoded.page.originalHeight)
+                assertTrue(RasterPixelChange.EXIF_ORIENTATION !in decoded.pixelChanges)
+                val actual=listOf(b.getPixel(10,10),b.getPixel(b.width-11,10),b.getPixel(10,b.height-11),b.getPixel(b.width-11,b.height-11))
+                actual.zip(expected).forEach { (a,e) ->
+                    assertTrue(kotlin.math.abs(Color.red(a)-Color.red(e))<25 && kotlin.math.abs(Color.green(a)-Color.green(e))<25 && kotlin.math.abs(Color.blue(a)-Color.blue(e))<25)
+                }
+            }
+            assertEquals(0L,resources.liveBitmapBytes)
+        }
+    }
     @Test fun jpegScanTruncationAndTransportFooterCompatibilityAreSeparate() = runBlocking {
         val bytes=fixture(Bitmap.CompressFormat.JPEG,1)
         val withFooter=bytes+ByteArray(24) { (it*7+3).toByte() }
@@ -114,22 +132,29 @@ class RasterPreprocessAndroidTest {
         val sos=(0 until bytes.size-3).first { (bytes[it].toInt() and 255)==255 && (bytes[it+1].toInt() and 255)==218 }
         val length=(bytes[sos+2].toInt() and 255 shl 8) or (bytes[sos+3].toInt() and 255)
         val entropy=sos+2+length
-        for (cut in listOf(entropy,entropy+(bytes.size-2-entropy)/2)) {
-            val truncated=bytes.copyOf(cut)
-            val bounds=android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds=true }
-            android.graphics.BitmapFactory.decodeByteArray(truncated,0,truncated.size,bounds)
-            assertEquals(90,bounds.outWidth);assertEquals(60,bounds.outHeight)
-            val platform=android.graphics.BitmapFactory.decodeByteArray(truncated,0,truncated.size)
-            try {
-                println("RASTER_JPEG_TRUNCATION_PROBE cut=$cut platformAccepted=${platform!=null} width=${platform?.width ?: 0} height=${platform?.height ?: 0}")
-            } finally { platform?.recycle() }
-            val resources=RasterResources(OcrWorkBudget())
-            try {
-                AndroidImportImageDecoder(context).withDecoded(ByteArrayInputStream(truncated),resources) { fail("must reject missing EOI") }
-                fail("must reject missing EOI")
-            } catch (e:RasterException) { assertEquals(RasterFailure.INVALID_IMAGE,e.code) }
-            assertEquals(0L,resources.workBudget.consumedPixels);assertEquals(0L,resources.liveBitmapBytes)
+        // A scan without any entropy data stays rejected; the decoder never sees a fake raster.
+        val headerOnly=bytes.copyOf(entropy)
+        val headerResources=RasterResources(OcrWorkBudget())
+        try {
+            AndroidImportImageDecoder(context).withDecoded(ByteArrayInputStream(headerOnly),headerResources) { fail("must reject empty scan") }
+            fail("must reject empty scan")
+        } catch (e:RasterException) { assertEquals(RasterFailure.INVALID_IMAGE,e.code) }
+        assertEquals(0L,headerResources.workBudget.consumedPixels);assertEquals(0L,headerResources.liveBitmapBytes)
+        // A chat/transport copy that lost only the end-of-image marker still carries the declared
+        // raster; the platform decodes the remaining scan data and bounds stay exact.
+        val withoutEoi=bytes.copyOf(bytes.size-2)
+        val bounds=android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds=true }
+        android.graphics.BitmapFactory.decodeByteArray(withoutEoi,0,withoutEoi.size,bounds)
+        assertEquals(90,bounds.outWidth);assertEquals(60,bounds.outHeight)
+        val resources=RasterResources(OcrWorkBudget())
+        var released=0L
+        AndroidImportImageDecoder(context).withDecoded(ByteArrayInputStream(withoutEoi),resources) { decoded ->
+            assertEquals(90,decoded.page.bitmap.width);assertEquals(60,decoded.page.bitmap.height)
+            assertTrue(resources.liveBitmapBytes>0)
+            released=resources.liveBitmapBytes
         }
+        assertTrue(released>0);assertEquals(0L,resources.liveBitmapBytes)
+        assertTrue(resources.workBudget.consumedPixels>0)
     }
     private fun pdf(rotations: List<Int>, encrypted: Boolean=false, pages: Int=7): ByteArray {
         PDFBoxResourceLoader.init(context)
