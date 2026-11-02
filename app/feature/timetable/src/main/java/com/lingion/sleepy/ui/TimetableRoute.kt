@@ -35,7 +35,6 @@ import java.time.ZoneId
 @Composable
 fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Modifier) {
     var importOpen by rememberSaveable { mutableStateOf(false) }
-    var noticeAdjustmentOpen by rememberSaveable { mutableStateOf(false) }
     var noticeHistoryOpen by rememberSaveable { mutableStateOf(false) }
     var manualOccurrenceOpen by rememberSaveable { mutableStateOf(false) }
     var manualOccurrenceCourseId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -53,17 +52,6 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
         )
         return
     }
-    if (noticeAdjustmentOpen && noticeRepo != null) {
-        NoticeAdjustmentScreen(
-            dependencies = dependencies,
-            onNavigateToHistory = {
-                noticeAdjustmentOpen = false
-                noticeHistoryOpen = true
-            },
-            onClose = { noticeAdjustmentOpen = false }
-        )
-        return
-    }
     if (noticeHistoryOpen && noticeRepo != null) {
         NoticeAdjustmentHistoryScreen(
             dependencies = dependencies,
@@ -75,12 +63,6 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
     if (importOpen && importRepository != null) {
         ImportFlowScreen(
             repository = importRepository,
-            onNavigateToNoticeAdjustment = if (noticeRepo != null) {
-                {
-                    importOpen = false
-                    noticeAdjustmentOpen = true
-                }
-            } else null,
             onClose = { importOpen = false }
         )
         return
@@ -249,13 +231,6 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
                     }
                 }
                 if (noticeRepo != null) {
-                    TextButton(
-                        onClick = { noticeAdjustmentOpen = true },
-                        enabled = !editorOpen && !state.isSaving,
-                        modifier = Modifier.testTag("timetable-btn-notice-adjustment")
-                    ) {
-                        Text("文字通知调课")
-                    }
                     TextButton(
                         onClick = { noticeHistoryOpen = true },
                         enabled = !editorOpen && !state.isSaving,

@@ -271,7 +271,7 @@ private fun HistoryEntryCard(
                     onClick = onToggleSource,
                     modifier = Modifier.testTag("notice-history-expand-${entry.eventId}")
                 ) {
-                    Text(if (isSourceExpanded) "收起通知原文" else "查看通知原文")
+                    Text(if (isSourceExpanded) "收起操作说明/原文" else "查看操作说明/原文")
                 }
                 AnimatedVisibility(visible = isSourceExpanded) {
                     Surface(

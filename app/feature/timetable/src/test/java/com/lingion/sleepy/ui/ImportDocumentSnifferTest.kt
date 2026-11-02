@@ -21,7 +21,12 @@ class ImportDocumentSnifferTest {
     @Test fun textRoutingRecognizesBomJsonAndCsvMimeWithoutFilename() {
         assertEquals(ImportDocumentKind.JSON, ImportDocumentSniffer.detect("\uFEFF  {\"schemaVersion\":1}".toByteArray(), null))
         assertEquals(ImportDocumentKind.CSV, ImportDocumentSniffer.detect("name,weeks,sections".toByteArray(), "text/csv"))
-        assertEquals(ImportDocumentKind.TEXT, ImportDocumentSniffer.detect("下周三增加实验".toByteArray(), "text/plain"))
+        assertNull(ImportDocumentSniffer.detect("下周三增加实验".toByteArray(), "text/plain"))
+        assertNull(ImportDocumentSniffer.detect("下周三增加实验".toByteArray(), "application/json"))
+        val textProbe = ImportDocumentSniffer.probe("下周三增加实验".toByteArray(), "text/plain")
+        assertEquals(ImportContentFormat.TEXT, textProbe.format)
+        assertNull(textProbe.documentKind)
+        assertTrue(ImportReadMessages.content(textProbe).contains("已取消文字通知导入功能"))
         assertNull(ImportDocumentSniffer.detect(byteArrayOf(0,1,2,3,4), "application/octet-stream"))
     }
 

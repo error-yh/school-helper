@@ -100,6 +100,17 @@ class ImportFlowViewModelTest {
         model.confirm();assertTrue(model.state.value.confirming)
         model.apply();assertEquals(1,repository.writes)
     }
+    @Test fun noticeTextModeIsImmediatelyRejectedWithZeroWrites() = runBlocking {
+        val repository=FakeImportRepository();val model=ImportFlowViewModel(repository)
+        model.kind(ImportTextKind.NOTICE)
+        model.text("下周一数据结构停课")
+        model.parse()
+        assertEquals(0, repository.writes)
+        assertEquals(0, repository.previews)
+        assertNull(model.state.value.session)
+        assertFalse(model.state.value.busy)
+        assertTrue(model.state.value.problems.single().contains("已取消文字通知导入功能"))
+    }
     private class FakeImportRepository(private val withConflict:Boolean=false,private val conflictCount:Int=1,private val withSourceRelation:Boolean=false) : ImportRepository {
         var writes=0
         var previews=0

@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: GPL-3.0-only
+ * UI test verifying text notices are rejected in import, zero writes are enforced,
+ * and valid JSON import remains functional.
+ */
 package com.aggapp.app
 
 import android.os.SystemClock
@@ -6,9 +10,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import com.aggapp.app.ui.MainActivity
-import com.lingion.sleepy.domain.model.MeetingKind
-import java.time.LocalDate
-import java.time.LocalTime
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -16,52 +17,59 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Synthetic notice, real UI and Room. Only this test's course is cleaned up. */
 @RunWith(AndroidJUnit4::class)
 class CampusNoticeImportTest {
-    @Test(timeout=180_000) fun relativeNoticeNeedsDateReviewThenPersistsAsIndependentExtra() {
-        val ui=CampusUiDriver();ui.launch();ui.waitText("本机课表")
-        val instrumentation=InstrumentationRegistry.getInstrumentation()
-        var activity:MainActivity?=null
+
+    @Test(timeout = 180_000)
+    fun plainTextNoticeIsRejectedWithZeroWritesAndJsonRemainsAvailable() {
+        val ui = CampusUiDriver()
+        ui.launch()
+        ui.waitText("本机课表")
+
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        var activity: MainActivity? = null
         instrumentation.runOnMainSync {
-            activity=ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
+            activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
                 .filterIsInstance<MainActivity>().single()
         }
-        val repository=checkNotNull(activity).timetableDependencies.repository
-        fun snapshot()=runBlocking {withTimeout(10_000) {repository.observeTimetable().first()}}
-        val before=snapshot()
-        val name="通知验收${SystemClock.uptimeMillis()}"
-        try {
-            ui.click("导入课表");ui.click("通知文字")
-            ui.enter("粘贴通知","明日 $name 10:00-11:30 在测试室 加课")
-            ui.enter("相对日期基准（年-月-日）","2026-12-30")
-            ui.click("读取内容")
-            ui.enter("作为新课程时的名称",name);ui.click("确认作为新课程")
-            // The source-level and pending-record warnings are independent reviews.
-            // Select actual unchecked controls, never toggle the first one twice.
-            ui.waitContaining("2026-12-31");ui.click("核对并预览")
-            ui.waitText("导入预览")
-            assertEquals("Whole-import date review and preview must not write",before,snapshot())
+        val repository = checkNotNull(activity).timetableDependencies.repository
+        fun snapshot() = runBlocking { withTimeout(10_000) { repository.observeTimetable().first() } }
+        val before = snapshot()
 
-            ui.click("继续确认");assertEquals(before,snapshot())
-            ui.click("取消");assertEquals(before,snapshot())
-            ui.click("继续确认");ui.click("确认追加")
-            ui.waitText("导入完成。可关闭此页查看课程。")
-            val saved=snapshot()
-            val course=saved.courses.single {it.courseName==name}
-            val meeting=course.meetings.single()
-            assertEquals(MeetingKind.DATE_SPECIFIC,meeting.kind)
-            assertEquals(setOf(LocalDate.of(2026,12,31)),meeting.dates)
-            assertEquals(LocalTime.of(10,0),meeting.customTime!!.start)
-            assertEquals(LocalTime.of(11,30),meeting.customTime!!.end)
-            assertEquals("测试室",meeting.room)
-            assertEquals(before.settings,saved.settings)
-            assertEquals(before.courses.size+1,saved.courses.size)
-            ui.click("查看课表");ui.recreateActivity();ui.waitText("本机课表")
-            assertEquals(saved,snapshot())
-            ui.click("课程");ui.revealText(name)
-        } finally {
-            snapshot().courses.filter {it.courseName==name}.forEach {runBlocking {repository.deleteCourse(it.id)}}
-        }
+        // 1. 进入导入课表，验证已无通知文字入口
+        ui.click("导入课表")
+        ui.waitText("选择课表文件或图片")
+        assertFalse("不得存在通知文字模式", ui.hasText("通知文字"))
+        assertFalse("不得存在相对日期基准输入框", ui.hasText("相对日期基准（年-月-日）"))
+
+        // 2. 粘贴普通通知文本进行读取，验证被立即拒绝且报错，底层零写入
+        val noticeText = "明日 离散数学测试 10:00-11:30 在测试室 加课"
+        ui.enter("粘贴 JSON", noticeText)
+        ui.click("读取内容")
+        ui.waitText("来源含待核对信息，请对照原文、安排和归属后重新检查。")
+        assertEquals("普通通知文本识别失败必须零写入", before, snapshot())
+
+        // 3. 关闭并重新进入导入课表，验证合法 JSON 格式正常读取，预览取消后保持零写入
+        ui.click("关闭")
+        ui.waitText("本机课表")
+        ui.click("导入课表")
+        ui.waitText("选择课表文件或图片")
+
+        val name = "结构化导入${SystemClock.uptimeMillis()}"
+        val validJson = """{"schemaVersion":1,"courses":[{"key":"c1","name":"$name","meetings":[{"key":"m1","kind":"RECURRING","dayOfWeek":1,"weeks":[1],"sections":[1]}]}]}"""
+        ui.enter("粘贴 JSON", validJson)
+        ui.waitValue("粘贴 JSON", validJson)
+        ui.click("读取内容")
+        ui.revealText("核对并预览")
+        ui.click("核对并预览")
+        ui.waitText("导入预览")
+        assertEquals("预览阶段必须零写入", before, snapshot())
+
+        // 取消预览并关闭
+        ui.click("返回修改")
+        ui.waitText("读取内容")
+        ui.click("关闭")
+        ui.waitText("本机课表")
+        assertEquals("取消后必须保持零写入", before, snapshot())
     }
 }

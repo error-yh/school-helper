@@ -14,5 +14,5 @@ internal object ImportSourceLoader {
         if (text.length > MAX_TEXT_CHARS) tooLarge() else VersionedJsonTimetableParser().parse(text.byteInputStream(), FormatParseContext(UUID.randomUUID().toString(), maxWeek))
 
     fun notice(text: String, maxWeek: Int, referenceDate: LocalDate, monday: LocalDate?): FormatParseResult =
-        if (text.length > MAX_TEXT_CHARS) tooLarge() else NoticeTimetableParser().parse(text, NoticeParseContext(FormatParseContext(UUID.randomUUID().toString(), maxWeek), referenceDate, monday))
+        FormatParseResult(null, issues = listOf(ParseIssue("TEXT_NOTICE_REMOVED", "已取消文字通知导入功能，不再支持导入通知文字；请使用 JSON 粘贴或选择结构化课表文件。")))
 }

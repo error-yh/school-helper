@@ -34,7 +34,7 @@ internal data class ImportContentProbe(val format: ImportContentFormat, val anim
         ImportContentFormat.ZIP -> ImportDocumentKind.XLSX
         ImportContentFormat.JSON -> ImportDocumentKind.JSON
         ImportContentFormat.CSV -> ImportDocumentKind.CSV
-        ImportContentFormat.TEXT -> ImportDocumentKind.TEXT
+        ImportContentFormat.TEXT -> null
         else -> null
     }
     /** Decoders that already pass the bounded container/orientation gate. */
@@ -168,6 +168,7 @@ internal object ImportReadMessages {
     const val PDF_GEOMETRY = "PDF 页面尺寸或旋转不受支持，请重新导出后重试。"
     const val PARSE = "文件结构无法解析，请检查格式和内容。"
     const val PARSE_LIMIT = "文件超过导入容量限制，请缩小后重试。"
+    const val TEXT_NOTICE_REJECTED = "已取消文字通知导入功能，不再支持导入普通文本或通知文件；请使用 JSON、CSV 或表格等结构化课表文件。"
 
     fun content(probe: ImportContentProbe): String = when (probe.format) {
         ImportContentFormat.OLE -> "所选文件是旧版 XLS（Excel 97-2003）表格；当前仅支持 XLSX，请另存为 XLSX 后重试。"
@@ -180,7 +181,8 @@ internal object ImportReadMessages {
         ImportContentFormat.GIF -> "所选文件是 GIF 图片，当前版本不支持 GIF；请转换为静态 JPG/PNG 后重试。"
         ImportContentFormat.BMP -> "所选文件是 BMP 图片，请转换为 JPG/PNG 后重试。"
         ImportContentFormat.TIFF -> "所选文件是 TIFF 图片，请转换为 JPG/PNG 后重试。"
-        ImportContentFormat.BINARY -> "无法识别所选文件的内容格式。请选择 PDF、JPG/PNG、XLSX、CSV、JSON 或 UTF-8 文本文件；文件名后缀不作为格式判断依据。"
+        ImportContentFormat.TEXT -> TEXT_NOTICE_REJECTED
+        ImportContentFormat.BINARY -> "无法识别所选文件的内容格式。请选择 PDF、JPG/PNG、XLSX、CSV 或 JSON 文件；文件名后缀不作为格式判断依据。"
         else -> "所选内容不是可识别的 ${probe.label} 文件，请重新选择或切换导入类型。"
     }
 
@@ -287,10 +289,7 @@ internal class AndroidImportDocumentLoader(context: Context) {
                                 ?: rejectFormat(result.issues)
                         }
                         ImportDocumentKind.JSON -> copy.openRead().use { source -> format(VersionedJsonTimetableParser().parse(source, context)) }
-                        ImportDocumentKind.TEXT -> copy.openRead().use { source ->
-                            val text = BoundedImportInput.readUtf8(source, context)
-                            format(NoticeTimetableParser().parse(text, NoticeParseContext(context, referenceDate, termMonday)))
-                        }
+                        ImportDocumentKind.TEXT -> reject(ImportReadMessages.TEXT_NOTICE_REJECTED, ImportReadFacts.STAGE_SNIFF, copy, prefix)
                         else -> reject(ImportReadMessages.content(detectedProbe), ImportReadFacts.STAGE_SNIFF, copy, prefix)
                     }
                     if (!diagnosed) {

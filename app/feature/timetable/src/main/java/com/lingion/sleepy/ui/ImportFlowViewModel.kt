@@ -242,6 +242,10 @@ internal class ImportFlowViewModel(private val repository: ImportRepository) : V
         if (mutable.value.busy) return
         documentRequest?.let { loadDocument(it.loader,it.uri,it.kind);return }
         val input=mutable.value; val token=++generation
+        if (input.kind == ImportTextKind.NOTICE) {
+            mutable.update { it.copy(busy=false, problems=listOf("已取消文字通知导入功能，不再支持导入通知文字；请使用 JSON 粘贴或选择结构化课表文件。")) }
+            return
+        }
         mutable.update { it.copy(busy=true,session=null,target=null,evidence=emptySet(),acceptedOptional=emptySet(),acceptedUnscheduled=emptySet(),attachments=emptyMap(),relativeReviews=emptyMap(),timeChoices=emptyMap(),conflictChoices=emptyMap(),preview=null,reviewed=null,problems=emptyList(),completed=false) }
         viewModelScope.launch {
             try {

@@ -36,13 +36,12 @@ import com.lingion.sleepy.domain.repository.ImportRepository
 import java.time.LocalDate
 
 @Composable
-internal fun ImportFlowScreen(repository: ImportRepository, onNavigateToNoticeAdjustment: (() -> Unit)? = null, onClose: () -> Unit) {
+internal fun ImportFlowScreen(repository: ImportRepository, onClose: () -> Unit) {
     val model: ImportFlowViewModel = viewModel(factory=remember(repository) { ImportFlowViewModel.Factory(repository) })
     val state by model.state.collectAsStateWithLifecycle()
     val context=LocalContext.current
     val loader=remember(context.applicationContext) { AndroidImportDocumentLoader(context.applicationContext) }
     var documentKind by rememberSaveable { mutableStateOf(ImportDocumentKind.AUTO.name) }
-    var dateText by remember { mutableStateOf(state.referenceDate.toString()) }
     var editingCourse by rememberSaveable { mutableIntStateOf(-1) }
     var editingMeeting by rememberSaveable { mutableIntStateOf(-1) }
     var showSource by rememberSaveable { mutableStateOf(false) }
@@ -70,32 +69,22 @@ internal fun ImportFlowScreen(repository: ImportRepository, onNavigateToNoticeAd
         }
         Text("来源在本机处理。检查结果并确认后才会保存。")
         Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            ImportDocumentKind.entries.forEach { kind ->
+            ImportDocumentKind.entries.filter { it != ImportDocumentKind.TEXT }.forEach { kind ->
                 FilterChip(selected=documentKind==kind.name,onClick={documentKind=kind.name;model.documentKind(kind)},enabled=!state.busy,
-                    label={Text(when(kind) { ImportDocumentKind.AUTO->"自动识别";ImportDocumentKind.IMAGE->"图片";ImportDocumentKind.TEXT->"文字文件";else->kind.name })})
+                    label={Text(when(kind) { ImportDocumentKind.AUTO->"自动识别";ImportDocumentKind.IMAGE->"图片";else->kind.name })})
             }
         }
         OutlinedButton(onClick={picker.launch(arrayOf("*/*"))},enabled=!state.busy) { Text("选择课表文件或图片") }
         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected=state.kind==ImportTextKind.JSON,onClick={model.kind(ImportTextKind.JSON)},label={Text("JSON")},enabled=!state.busy)
-            FilterChip(selected=state.kind==ImportTextKind.NOTICE,onClick={model.kind(ImportTextKind.NOTICE)},label={Text("通知文字")},enabled=!state.busy)
+            FilterChip(selected=true,onClick={model.kind(ImportTextKind.JSON)},label={Text("JSON")},enabled=!state.busy)
         }
-        if(state.documentSelected) Text("已选择本机文件。更换格式、模式或日期依据后，请重新读取并审核。")
-        else OutlinedTextField(value=state.text,onValueChange=model::text,modifier=Modifier.fillMaxWidth().heightIn(min=120.dp,max=260.dp).semantics { contentDescription=if(state.kind==ImportTextKind.JSON) "粘贴 JSON" else "粘贴通知" },enabled=!state.busy,label={Text(if(state.kind==ImportTextKind.JSON) "粘贴 JSON" else "粘贴通知")})
-        if(state.kind==ImportTextKind.NOTICE && onNavigateToNoticeAdjustment!=null) {
-            Text("提示：此处用于批量导入新课程。若需对已有课程进行单次调课、停课或补课，请使用【文字通知调课】。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.primary)
-            TextButton(onClick=onNavigateToNoticeAdjustment, modifier=Modifier.testTag("import-btn-switch-to-notice-adjustment")) {
-                Text("前往文字通知调课 →")
-            }
-        }
-        if(state.kind==ImportTextKind.NOTICE || state.documentSelected) {
-            OutlinedTextField(value=dateText,onValueChange={ value -> dateText=value; val date=runCatching { LocalDate.parse(value) }.getOrNull(); if(date==null) model.invalidReferenceDate() else model.referenceDate(date) },label={Text("相对日期基准（年-月-日）")},modifier=Modifier.semantics {contentDescription="相对日期基准（年-月-日）"},singleLine=true,enabled=!state.busy)
-        }
+        if(state.documentSelected) Text("已选择本机文件。更换格式或模式后，请重新读取并审核。")
+        else OutlinedTextField(value=state.text,onValueChange=model::text,modifier=Modifier.fillMaxWidth().heightIn(min=120.dp,max=260.dp).semantics { contentDescription="粘贴 JSON" },enabled=!state.busy,label={Text("粘贴 JSON")})
         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             FilterChip(selected=state.mode==ImportMode.APPEND,onClick={model.mode(ImportMode.APPEND)},label={Text("追加")},enabled=!state.busy)
             FilterChip(selected=state.mode==ImportMode.REPLACE,onClick={model.mode(ImportMode.REPLACE)},label={Text("替换本学期")},enabled=!state.busy)
         }
-        Button(onClick=model::parse,enabled=!state.busy && (state.text.isNotBlank() || state.documentSelected) && runCatching { LocalDate.parse(dateText) }.isSuccess) { Text("读取内容") }
+        Button(onClick=model::parse,enabled=!state.busy && (state.text.isNotBlank() || state.documentSelected)) { Text("读取内容") }
         if(state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         state.tables?.let { tables -> ImportTableMappingPane(tables,!state.busy,model::mapDocument) }
         state.session?.let { session ->
