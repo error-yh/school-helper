@@ -33,6 +33,8 @@ data class PendingExceptionAttachment(
     val declaredWeeks:Set<Int> = emptySet(),
     val dayOfWeek:Int? = null,
     val candidatePaths:List<DraftPath> = emptyList(),
+    /** Explicit old/new roles for the new single-occurrence flow. Older notices leave it null. */
+    val roles:NoticeExceptionRoles? = null,
 )
 
 data class RelativeDateProposal(

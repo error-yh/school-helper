@@ -5,6 +5,7 @@ package com.lingion.sleepy.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,9 +35,54 @@ import java.time.ZoneId
 @Composable
 fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Modifier) {
     var importOpen by rememberSaveable { mutableStateOf(false) }
+    var noticeAdjustmentOpen by rememberSaveable { mutableStateOf(false) }
+    var noticeHistoryOpen by rememberSaveable { mutableStateOf(false) }
+    var manualOccurrenceOpen by rememberSaveable { mutableStateOf(false) }
+    var manualOccurrenceCourseId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var manualOccurrenceInitialMode by rememberSaveable { mutableStateOf(ManualOccurrenceMode.ADJUST) }
+    val noticeRepo = dependencies.noticeAdjustments
+    if (manualOccurrenceOpen && noticeRepo != null && manualOccurrenceCourseId != null) {
+        ManualOccurrenceScreen(
+            dependencies = dependencies,
+            courseId = manualOccurrenceCourseId!!,
+            initialMode = manualOccurrenceInitialMode,
+            onClose = {
+                manualOccurrenceOpen = false
+                manualOccurrenceCourseId = null
+            }
+        )
+        return
+    }
+    if (noticeAdjustmentOpen && noticeRepo != null) {
+        NoticeAdjustmentScreen(
+            dependencies = dependencies,
+            onNavigateToHistory = {
+                noticeAdjustmentOpen = false
+                noticeHistoryOpen = true
+            },
+            onClose = { noticeAdjustmentOpen = false }
+        )
+        return
+    }
+    if (noticeHistoryOpen && noticeRepo != null) {
+        NoticeAdjustmentHistoryScreen(
+            dependencies = dependencies,
+            onClose = { noticeHistoryOpen = false }
+        )
+        return
+    }
     val importRepository = dependencies.imports
     if (importOpen && importRepository != null) {
-        ImportFlowScreen(importRepository) { importOpen = false }
+        ImportFlowScreen(
+            repository = importRepository,
+            onNavigateToNoticeAdjustment = if (noticeRepo != null) {
+                {
+                    importOpen = false
+                    noticeAdjustmentOpen = true
+                }
+            } else null,
+            onClose = { importOpen = false }
+        )
         return
     }
     val factory = remember(dependencies.repository) { TimetableViewModel.Factory(dependencies.repository) }
@@ -189,7 +235,36 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
     Column(modifier.fillMaxSize().testTag("timetable-page")) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             SectionHeader("本机课表", "课程仅保存在本机，可离线查看。")
-            if (importRepository != null) TextButton(onClick = { importOpen = true }, enabled = !editorOpen && !state.isSaving) { Text("导入课表") }
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (importRepository != null) {
+                    TextButton(
+                        onClick = { importOpen = true },
+                        enabled = !editorOpen && !state.isSaving,
+                        modifier = Modifier.testTag("timetable-btn-import")
+                    ) {
+                        Text("导入课表")
+                    }
+                }
+                if (noticeRepo != null) {
+                    TextButton(
+                        onClick = { noticeAdjustmentOpen = true },
+                        enabled = !editorOpen && !state.isSaving,
+                        modifier = Modifier.testTag("timetable-btn-notice-adjustment")
+                    ) {
+                        Text("文字通知调课")
+                    }
+                    TextButton(
+                        onClick = { noticeHistoryOpen = true },
+                        enabled = !editorOpen && !state.isSaving,
+                        modifier = Modifier.testTag("timetable-btn-notice-history")
+                    ) {
+                        Text("调整记录")
+                    }
+                }
+            }
         }
         if (!editorOpen) {
             TabRow(selectedTabIndex = tab) {
@@ -277,15 +352,34 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
                 confirmButton = { TextButton(onClick = { model.deleteCourse(selected.id) }, enabled = canWrite) { Text("确认删除") } },
                 dismissButton = { TextButton(onClick = { confirmDelete = false }, enabled = !state.isSaving) { Text("取消") } })
         } else {
-            CourseDetails(selected, state.snapshot, onClose = { selectedId = null },
-                onEdit = { openEditor(selected) }, onDelete = { model.clearMessage(); confirmDelete = true }, enabled = canWrite)
+            CourseDetails(
+                course = selected,
+                snapshot = state.snapshot,
+                onClose = { selectedId = null },
+                onEdit = { openEditor(selected) },
+                onDelete = { model.clearMessage(); confirmDelete = true },
+                onManualOccurrence = if (noticeRepo != null) { mode ->
+                    manualOccurrenceCourseId = selected.id
+                    manualOccurrenceInitialMode = mode
+                    manualOccurrenceOpen = true
+                    selectedId = null
+                } else null,
+                enabled = canWrite
+            )
         }
     }
 }
 
 @Composable
-private fun CourseDetails(course: ScheduledCourse, snapshot: TimetableSnapshot,
-    onClose: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit, enabled: Boolean) {
+private fun CourseDetails(
+    course: ScheduledCourse,
+    snapshot: TimetableSnapshot,
+    onClose: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onManualOccurrence: ((ManualOccurrenceMode) -> Unit)? = null,
+    enabled: Boolean
+) {
     AlertDialog(onDismissRequest = onClose,
         title = { Text("课程详情") },
         text = {
@@ -307,6 +401,40 @@ private fun CourseDetails(course: ScheduledCourse, snapshot: TimetableSnapshot,
                     meeting.group?.let { Text("分组：$it") }
                     meeting.exceptions.forEach { Text("例外：${it.kind} ${it.originalDate ?: ""} ${it.targetDate ?: ""}") }
                     meeting.provenance.forEach { source -> source.rawText?.let { Text("来源：$it") } }
+                }
+
+                if (onManualOccurrence != null) {
+                    HorizontalDivider()
+                    Text("单次操作（仅此一次，不影响周期规则）：", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { onManualOccurrence(ManualOccurrenceMode.ADJUST) },
+                            modifier = Modifier.weight(1f).testTag("course-details-btn-adjust-once"),
+                            enabled = enabled,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                        ) {
+                            Text("调整一次", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(
+                            onClick = { onManualOccurrence(ManualOccurrenceMode.CANCEL) },
+                            modifier = Modifier.weight(1f).testTag("course-details-btn-cancel-once"),
+                            enabled = enabled,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                        ) {
+                            Text("停课一次", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(
+                            onClick = { onManualOccurrence(ManualOccurrenceMode.EXTRA) },
+                            modifier = Modifier.weight(1f).testTag("course-details-btn-extra-once"),
+                            enabled = enabled,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                        ) {
+                            Text("补课一次", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
                 }
             }
         },

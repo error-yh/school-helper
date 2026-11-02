@@ -86,9 +86,21 @@ class ImportReviewSession private constructor(
             is ExceptionAttachment.AsNewCourse -> require(e.kind == RichExceptionKind.EXTRA && attachment.identity.name.isNotBlank()) { "Only EXTRA can become a new course" }
         }
         val pending = locator.pendingIndex?.let { source.format.pendingExceptions[it] }
+        // A role-aware reschedule states the original sections/time as a match condition. Carrying
+        // them here makes the existing planner remove only that part of the stored occurrence
+        // instead of falling back to the whole logical interval. CANCEL keeps its previous meaning.
+        val roles = pending?.roles
+        val originalTime = when {
+            e.kind == RichExceptionKind.CANCEL -> e.customTime?.let { com.lingion.sleepy.domain.model.TimeRange(it.start, it.end) }
+            else -> roles?.original?.time?.let { com.lingion.sleepy.domain.model.TimeRange(it.start, it.end) }
+        }
+        val originalSections = when {
+            e.kind == RichExceptionKind.CANCEL -> e.sections?.let(::fSet)
+            else -> roles?.original?.sections?.takeIf { it.isNotEmpty() }?.let(::fSet)
+        }
         val scope = ExceptionOriginalScope(
-            time = if(e.kind == RichExceptionKind.CANCEL) e.customTime?.let { com.lingion.sleepy.domain.model.TimeRange(it.start,it.end) } else null,
-            sections = if(e.kind == RichExceptionKind.CANCEL) e.sections?.let(::fSet) else null, declaredWeeks = fSet(pending?.declaredWeeks ?: emptySet()), dayOfWeek = pending?.dayOfWeek,
+            time = originalTime,
+            sections = originalSections, declaredWeeks = fSet(pending?.declaredWeeks ?: emptySet()), dayOfWeek = pending?.dayOfWeek,
         )
         require(targetTime != ReviewedTimeSpec.Unscheduled) { "Exception target cannot be unscheduled" }
         require(e.kind != RichExceptionKind.CANCEL || targetTime == null) { "Cancellation time is original scope, not target time" }

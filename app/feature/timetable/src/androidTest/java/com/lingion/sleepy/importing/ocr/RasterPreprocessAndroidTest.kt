@@ -216,5 +216,61 @@ class RasterPreprocessAndroidTest {
         entered.await();job.cancel();assertFalse(owned!!.isRecycled);release.complete(Unit);job.join()
         assertTrue(owned!!.isRecycled);assertEquals(0L,resources.liveBitmapBytes)
     }
+    @Test fun staticWebpVariantsDecodeWithinBudgetWhileAnimatedAndMalformedReject() = runBlocking {
+        fun encode(format: String, alpha: Boolean): ByteArray {
+            val bitmap=Bitmap.createBitmap(90,60,Bitmap.Config.ARGB_8888)
+            try {
+                val canvas=Canvas(bitmap);val paint=android.graphics.Paint()
+                if(alpha) { bitmap.eraseColor(Color.TRANSPARENT);paint.color=Color.RED;canvas.drawRect(0f,0f,45f,60f,paint) }
+                else { canvas.drawColor(Color.WHITE);paint.color=Color.RED;canvas.drawRect(0f,0f,45f,60f,paint) }
+                val out=ByteArrayOutputStream()
+                check(bitmap.compress(Bitmap.CompressFormat.valueOf(format),100,out))
+                return out.toByteArray()
+            } finally { bitmap.recycle() }
+        }
+        for(format in listOf("WEBP","WEBP_LOSSLESS")) {
+            val resources=RasterResources(OcrWorkBudget())
+            AndroidImportImageDecoder(context).withDecoded(ByteArrayInputStream(encode(format,false)),resources) { decoded ->
+                val b=decoded.page.bitmap
+                assertEquals(90,b.width);assertEquals(60,b.height)
+                assertTrue("format=$format left=${Integer.toHexString(b.getPixel(10,10))} right=${Integer.toHexString(b.getPixel(80,10))}",
+                    kotlin.math.abs(Color.red(b.getPixel(10,10))-Color.red(Color.RED))<40 && Color.green(b.getPixel(10,10))<60 && Color.blue(b.getPixel(10,10))<60)
+                assertTrue("format=$format right=${Integer.toHexString(b.getPixel(80,10))}",
+                    kotlin.math.abs(Color.red(b.getPixel(80,10))-Color.red(Color.WHITE))<15 && kotlin.math.abs(Color.green(b.getPixel(80,10))-Color.green(Color.WHITE))<15)
+                assertEquals(PageAffineTransform.IDENTITY,decoded.page.rasterToPage)
+            }
+            assertEquals(0L,resources.liveBitmapBytes)
+        }
+        // Transparent static WebP gets the same white background as P/PNG.
+        val alphaResources=RasterResources(OcrWorkBudget())
+        AndroidImportImageDecoder(context).withDecoded(ByteArrayInputStream(encode("WEBP",true)),alphaResources) { decoded ->
+            assertTrue(RasterPixelChange.WHITE_BACKGROUND in decoded.pixelChanges)
+            assertEquals(90,decoded.page.bitmap.width)
+        }
+        assertEquals(0L,alphaResources.liveBitmapBytes)
+        // Animated WebP is refused before any frame is picked.
+        try {
+            AndroidImportImageDecoder(context).withDecoded(ByteArrayInputStream(animatedWebp()),RasterResources(OcrWorkBudget())) { fail("must reject animation") }
+            fail("must reject animation")
+        } catch(e:RasterException) { assertEquals(RasterFailure.UNSUPPORTED_FORMAT,e.code) }
+        // Truncated/mis-sized containers are damaged content, not decodable images.
+        val broken=encode("WEBP",false)
+        for(bytes in listOf(broken.copyOf(broken.size/2),broken.copyOf().also { it[4]=(it[4]+9).toByte() })) {
+            try {
+                AndroidImportImageDecoder(context).withDecoded(ByteArrayInputStream(bytes),RasterResources(OcrWorkBudget())) { fail("must reject damaged WebP") }
+                fail("must reject damaged WebP")
+            } catch(e:RasterException) { assertEquals(RasterFailure.INVALID_IMAGE,e.code) }
+        }
+    }
+    private fun le32(value:Int)=byteArrayOf(value.toByte(),(value ushr 8).toByte(),(value ushr 16).toByte(),(value ushr 24).toByte())
+    private fun riffChunk(name:String,data:ByteArray):ByteArray {
+        val padded=if(data.size%2==0) data else data+0
+        return name.toByteArray()+le32(padded.size)+padded
+    }
+    private fun animatedWebp():ByteArray {
+        val vp8x=ByteArray(10).also { it[0]=0x02 }
+        val body=riffChunk("VP8X",vp8x)+riffChunk("ANIM",ByteArray(6))+riffChunk("VP8 ",byteArrayOf(1,2,3,4))
+        return "RIFF".toByteArray()+le32(body.size+4)+"WEBP".toByteArray()+body
+    }
 }
 

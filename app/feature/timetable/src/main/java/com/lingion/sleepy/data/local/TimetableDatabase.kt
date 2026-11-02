@@ -6,16 +6,17 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 /**
- * An independent database for each host-selected profile, with lossless v1 to v2 to v3 migrations.
- * It does not open, migrate, or claim compatibility with Sleepy's version 12 database.
+ * An independent database for each host-selected profile, with lossless v1 to v2 to v3 to v4 to v5
+ * migrations. It does not open, migrate, or claim compatibility with Sleepy's version 12 database.
  * The host owns each returned instance and its lifetime.
  */
 @Database(
     entities = [CourseEntity::class, SemesterEntity::class, PeriodEntity::class,
         ScheduledCourseEntity::class, CourseMeetingEntity::class, MeetingWeekEntity::class, MeetingSectionEntity::class,
         MeetingDateEntity::class, MeetingDeclaredWeekEntity::class, MeetingExceptionEntity::class,
-        ExceptionSectionEntity::class, ScheduleProvenanceEntity::class, ImportNormalizationStateEntity::class],
-    version = 4,
+        ExceptionSectionEntity::class, ScheduleProvenanceEntity::class, ImportNormalizationStateEntity::class,
+        NoticeAdjustmentEventEntity::class],
+    version = 5,
     exportSchema = true,
 )
 abstract class TimetableDatabase : RoomDatabase() {
@@ -24,6 +25,8 @@ abstract class TimetableDatabase : RoomDatabase() {
         private set
 
     abstract fun scheduleDao(): ScheduleDao
+
+    abstract fun noticeAdjustmentDao(): NoticeAdjustmentDao
 
     companion object {
         /** Profile IDs are 1 to 64 ASCII letters, digits, underscores, or hyphens. */
@@ -35,7 +38,7 @@ abstract class TimetableDatabase : RoomDatabase() {
                 context.applicationContext,
                 TimetableDatabase::class.java,
                 "timetable_$profileId.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).addCallback(CALENDAR_CALLBACK).build().also { it.scopeToken = profileId }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).addCallback(CALENDAR_CALLBACK).build().also { it.scopeToken = profileId }
         }
     }
 }

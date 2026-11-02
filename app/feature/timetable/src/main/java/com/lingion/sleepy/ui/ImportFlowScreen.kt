@@ -36,7 +36,7 @@ import com.lingion.sleepy.domain.repository.ImportRepository
 import java.time.LocalDate
 
 @Composable
-internal fun ImportFlowScreen(repository: ImportRepository, onClose: () -> Unit) {
+internal fun ImportFlowScreen(repository: ImportRepository, onNavigateToNoticeAdjustment: (() -> Unit)? = null, onClose: () -> Unit) {
     val model: ImportFlowViewModel = viewModel(factory=remember(repository) { ImportFlowViewModel.Factory(repository) })
     val state by model.state.collectAsStateWithLifecycle()
     val context=LocalContext.current
@@ -82,6 +82,12 @@ internal fun ImportFlowScreen(repository: ImportRepository, onClose: () -> Unit)
         }
         if(state.documentSelected) Text("已选择本机文件。更换格式、模式或日期依据后，请重新读取并审核。")
         else OutlinedTextField(value=state.text,onValueChange=model::text,modifier=Modifier.fillMaxWidth().heightIn(min=120.dp,max=260.dp).semantics { contentDescription=if(state.kind==ImportTextKind.JSON) "粘贴 JSON" else "粘贴通知" },enabled=!state.busy,label={Text(if(state.kind==ImportTextKind.JSON) "粘贴 JSON" else "粘贴通知")})
+        if(state.kind==ImportTextKind.NOTICE && onNavigateToNoticeAdjustment!=null) {
+            Text("提示：此处用于批量导入新课程。若需对已有课程进行单次调课、停课或补课，请使用【文字通知调课】。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.primary)
+            TextButton(onClick=onNavigateToNoticeAdjustment, modifier=Modifier.testTag("import-btn-switch-to-notice-adjustment")) {
+                Text("前往文字通知调课 →")
+            }
+        }
         if(state.kind==ImportTextKind.NOTICE || state.documentSelected) {
             OutlinedTextField(value=dateText,onValueChange={ value -> dateText=value; val date=runCatching { LocalDate.parse(value) }.getOrNull(); if(date==null) model.invalidReferenceDate() else model.referenceDate(date) },label={Text("相对日期基准（年-月-日）")},modifier=Modifier.semantics {contentDescription="相对日期基准（年-月-日）"},singleLine=true,enabled=!state.busy)
         }

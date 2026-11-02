@@ -2,10 +2,12 @@ package com.aggapp.app.di
 
 import android.content.Context
 import com.lingion.sleepy.api.TimetableDependencies
+import com.lingion.sleepy.data.RoomNoticeAdjustmentRepository
 import com.lingion.sleepy.data.RoomScheduleRepository
 import com.lingion.sleepy.data.local.TimetableDatabase
 import com.lingion.sleepy.domain.repository.ScheduleRepository
 import com.lingion.sleepy.domain.repository.ImportRepository
+import com.lingion.sleepy.domain.repository.NoticeAdjustmentRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -37,6 +39,19 @@ object TimetableModule {
 
     @Provides
     @Singleton
-    fun provideTimetableDependencies(repository: ScheduleRepository, imports: ImportRepository): TimetableDependencies =
-        TimetableDependencies(repository, imports)
+    fun provideRoomNoticeAdjustmentRepository(database: TimetableDatabase): RoomNoticeAdjustmentRepository =
+        RoomNoticeAdjustmentRepository(database)
+
+    @Provides
+    fun provideNoticeAdjustmentRepository(repository: RoomNoticeAdjustmentRepository): NoticeAdjustmentRepository =
+        repository
+
+    @Provides
+    @Singleton
+    fun provideTimetableDependencies(
+        repository: ScheduleRepository,
+        imports: ImportRepository,
+        noticeAdjustments: NoticeAdjustmentRepository,
+    ): TimetableDependencies =
+        TimetableDependencies(repository, imports, noticeAdjustments)
 }

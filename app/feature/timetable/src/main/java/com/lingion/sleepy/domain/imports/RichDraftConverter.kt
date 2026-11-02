@@ -213,6 +213,15 @@ object RichDraftConverter {
             val raw = s.exception(p)
             val review = decisions.attachments.singleOrNull { it.source == p && it.binding == s.binding } ?: return
             val pending = p.pendingIndex?.let { s.source.format.pendingExceptions[it] }
+            // An explicitly malformed role is not "no change": the old entry has no per-field
+            // correction record, so it blocks instead of inheriting the current scope/time.
+            val roles = pending?.roles
+            if (roles != null) {
+                if (roles.originalTimeInvalid) problem("ORIGINAL_TIME_INVALID_REQUIRES_CORRECTION",p)
+                if (roles.originalSectionsInvalid) problem("ORIGINAL_SECTIONS_INVALID_REQUIRES_CORRECTION",p)
+                if (roles.targetTimeInvalid) problem("TARGET_TIME_INVALID_REQUIRES_CORRECTION",p)
+                if (roles.targetSectionsInvalid) problem("TARGET_SECTIONS_INVALID_REQUIRES_CORRECTION",p)
+            }
             // Relative reviews confirm this frozen parse context. Correction/basis changes require
             // a new parse/session; they cannot fill ambiguous null dates or rewrite absolute dates.
             val originalDate = raw.originalDate

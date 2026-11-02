@@ -19,8 +19,58 @@ internal object ImageContainerOrientation {
                 for (index in 2..7) if (reader.byte() != (pngSignature[index].toInt() and 255)) invalid(RasterFailure.UNSUPPORTED_FORMAT)
                 png(reader)
             }
+            // RIFF/WEBP: static lossy (VP8), lossless (VP8L) and extended (VP8X + VP8/VP8L)
+            // containers only. Animated WebP and unknown RIFF payloads are rejected explicitly.
+            first == 82 && second == 73 -> webp(reader, byteCount)
             else -> invalid(RasterFailure.UNSUPPORTED_FORMAT)
         }
+    }
+    /** Bounded RIFF chunk walk: declared sizes must stay inside the counted copy and no
+     * pixel data is decoded or allocated here. Orientation comes only from a bounded EXIF chunk.
+     */
+    private fun webp(reader: Counted, byteCount: Long): Int {
+        if (reader.byte() != 70 || reader.byte() != 70) invalid(RasterFailure.UNSUPPORTED_FORMAT)
+        val declared = reader.u32le()
+        // RIFF size excludes the eight header bytes; tolerate one trailing pad byte either way.
+        if (declared != byteCount - 8 && declared != byteCount - 7 && declared != byteCount - 9) invalid()
+        if (!reader.bytes(4).contentEquals(byteArrayOf(87, 69, 66, 80))) invalid(RasterFailure.UNSUPPORTED_FORMAT)
+        var orientation = 1; var exifSeen = false; var extended = false; var sawImage = false; var chunks = 0
+        while (reader.remaining >= 8) {
+            if (++chunks > 4096) limit()
+            val name = reader.bytes(4).toString(Charsets.US_ASCII)
+            val size = reader.u32le()
+            if (size > reader.remaining) invalid()
+            when (name) {
+                "VP8X" -> {
+                    if (chunks != 1 || extended || size != 10L) invalid()
+                    extended = true
+                    val payload = reader.bytes(10)
+                    // Reserved bits stay zero; the animation flag is rejected instead of
+                    // silently decoding an arbitrary first frame.
+                    if ((payload[0].toInt() and 0xC1) != 0 || payload[1].toInt() != 0 || payload[2].toInt() != 0 || payload[3].toInt() != 0) invalid()
+                    if ((payload[0].toInt() and 0x02) != 0) invalid(RasterFailure.UNSUPPORTED_FORMAT)
+                }
+                "ANIM", "ANMF" -> invalid(RasterFailure.UNSUPPORTED_FORMAT)
+                "VP8 ", "VP8L" -> {
+                    if (sawImage) invalid(); sawImage = true
+                    reader.skip(size)
+                }
+                "ALPH" -> { if (!extended) invalid(); reader.skip(size) }
+                "EXIF" -> {
+                    if (exifSeen) invalid(); exifSeen = true
+                    if (size > MAX_METADATA) limit()
+                    val data = reader.bytes(size.toInt())
+                    val payload = if (data.size >= 6 && data[0] == 69.toByte() && data[1] == 120.toByte() && data[2] == 105.toByte() &&
+                        data[3] == 102.toByte() && data[4] == 0.toByte() && data[5] == 0.toByte()) data.copyOfRange(6, data.size) else data
+                    orientation = ifd0(payload)
+                }
+                else -> { if (size > MAX_METADATA && (name == "ICCP" || name == "XMP ")) limit(); reader.skip(size) }
+            }
+            if (size % 2 == 1L) { if (reader.remaining < 1) invalid(); reader.skip(1) }
+        }
+        if (reader.remaining > 0) { if (reader.remaining != 1L) invalid(); reader.skip(1) }
+        if (!sawImage || !reader.atEnd()) invalid()
+        return orientation
     }
     private fun jpeg(reader: Counted): Int {
         var exifSeen = false; var orientation = 1
@@ -125,6 +175,8 @@ internal object ImageContainerOrientation {
             val value = input.read(); if (value < 0) invalid(); remaining--; return value
         }
         fun u32(): Long = (byte().toLong() shl 24) or (byte().toLong() shl 16) or (byte().toLong() shl 8) or byte().toLong()
+        fun u32le(): Long = byte().toLong() or (byte().toLong() shl 8) or (byte().toLong() shl 16) or (byte().toLong() shl 24)
+        fun atEnd(): Boolean = remaining == 0L
         fun bytes(length: Int): ByteArray {
             probe(); if (length < 0 || length > MAX_METADATA || length.toLong() > remaining) invalid()
             val bytes = ByteArray(length); var position = 0

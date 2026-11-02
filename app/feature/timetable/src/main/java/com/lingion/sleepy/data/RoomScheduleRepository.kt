@@ -264,6 +264,54 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
         return ids
     }
 
+    // ---- Narrow internal hooks for the notice adjustment execution layer. They keep the same
+    // transaction/validation semantics as editing and import; no SQL is duplicated.
+
+    internal suspend fun noticeLoadTarget(semesterId: Long = 1): LoadedImportTarget = loadImportTarget(semesterId)
+
+    internal suspend fun noticeReadSnapshot(semesterId: Long = 1): TimetableSnapshot = readSnapshot(semesterId)
+
+    internal fun noticeVerifyReviewed(reviewed: ReviewedImport): ReviewedImport = verifiedReview(reviewed)
+
+    internal suspend fun noticeIncrementRevision(semesterId: Long = 1) {
+        val semester = checkNotNull(dao.semester(semesterId)) { "学期配置缺失" }
+        check(dao.updateSemester(semester.copy(revision = Math.addExact(semester.revision, 1))) == 1)
+    }
+
+    /**
+     * Rewrite exactly one planned stored course (used for imported/normalized courses) and hydrate
+     * its legal normalization state, inside the caller's transaction. Mirrors applyImport so the
+     * graph and rows stay consistent.
+     */
+    internal suspend fun noticeWritePlannedCourse(
+        planned: PlannedCourse, previous: ScheduledCourse?, semesterId: Long = 1,
+    ): NoticeCourseWrite {
+        val id = checkNotNull(planned.existingCourseId) { "planned course has no stored id" }
+        val draft = planned.draft
+        check(dao.updateCourse(ScheduledCourseEntity(id, semesterId, draft.courseName, draft.teacher, draft.room,
+            draft.color, draft.sourceCourseCode, draft.sourceClassCode)) == 1) { "课程更新失败" }
+        val childIds = writeCourseChildren(id, draft, previous, semesterId)
+        val after = readSnapshot(semesterId)
+        val course = after.courses.single { it.id == id }
+        val fragments = planned.fragments.mapIndexed { index, fragment -> fragment.key to childIds[index].first }.toMap()
+        val additions = mutableMapOf<String, Long>()
+        planned.fragments.forEachIndexed { index, fragment ->
+            fragment.meeting.exceptions.forEachIndexed { eIndex, e ->
+                if (e.kind == com.lingion.sleepy.domain.model.ExceptionKind.EXTRA) {
+                    val add = planned.state.adds.single {
+                        it.ownerFragmentKey == fragment.key && it.scope.date == e.targetDate && it.scope.range == e.customTime &&
+                            it.identity.teacher == e.teacher && it.identity.room == e.room &&
+                            it.identity.group == e.group && it.identity.project == e.experimentProject
+                    }
+                    additions[add.exceptionKey] = childIds[index].second[eIndex]
+                }
+            }
+        }
+        val state = ImportNormalizationCodec.hydrate(planned, course, after.scopeToken, semesterId, after, fragments, additions)
+        dao.putImportState(ImportNormalizationStateEntity(id, state.version, ImportNormalizationCodec.encode(state)))
+        return NoticeCourseWrite(id, course, state)
+    }
+
     private suspend fun initializeIfEmpty() {
         if (dao.semester() != null) return
         val settings = SemesterSettings()
@@ -331,3 +379,11 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
         return LocalTime.of(value / 60, value % 60)
     }
 }
+
+/** Result of rewriting one planned stored course for the notice execution layer. */
+internal data class NoticeCourseWrite(
+    val courseId: Long,
+    /** Course exactly as written (rows re-read inside the same transaction). */
+    val course: ScheduledCourse,
+    val state: com.lingion.sleepy.domain.imports.StoredNormalizationState,
+)

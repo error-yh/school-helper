@@ -140,7 +140,8 @@ internal class ImportFlowViewModel(private val repository: ImportRepository) : V
             try {
                 val target=repository.readImportTarget(1)
                 val monday=target.snapshot.settings.startDate?.let(TimetableRules::mondayOf)
-                val loaded=loader.load(uri,kind,target.snapshot.settings.totalWeeks,monday,input.referenceDate)
+                val loaded=loader.load(uri,kind,target.snapshot.settings.totalWeeks,monday,input.referenceDate,
+                    ImportReadContext(hasDocumentRequest=true,textKind=input.kind.name))
                 if(token!=generation) return@launch
                 when(loaded) {
                     is LoadedImportDocument.Rejected -> mutable.update { it.copy(busy=false,problems=listOf(loaded.message)) }

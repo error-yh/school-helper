@@ -341,12 +341,21 @@ class ImportReviewKernelTest {
         assertNull(intent.originalScope.sections);assertNull(intent.originalScope.time)
         assertEquals(LocalTime.parse("10:00"),(intent.targetTime as ReviewedTimeSpec.Continuous).range.start)
     }
-    @Test fun `ambiguous notice clocks cannot be acknowledged into inherited target time`() {
-        val r = NoticeTimetableParser().parse("课程:Course 2026-11-02 08:00-08:45 调至 2026-11-03 10:00-10:45",NoticeParseContext(FormatParseContext("ambiguous-clocks",20),LocalDate.parse("2026-10-27")))
-        assertTrue(r.issues.any { it.code == "AMBIGUOUS_TIME_MAPPING" });assertNull(r.pendingExceptions.single().exception.customTime)
+    @Test fun `reschedule clocks keep lexical roles and the target override`() {
+        val r = NoticeTimetableParser().parse("课程:Course 2026-11-02 08:00-08:45 调至 2026-11-03 10:00-10:45",NoticeParseContext(FormatParseContext("lexical-clocks",20),LocalDate.parse("2026-10-27")))
+        assertTrue(r.issues.none { it.code == "AMBIGUOUS_TIME_MAPPING" })
+        val pending = r.pendingExceptions.single()
+        assertEquals("08:00",pending.roles!!.original.time!!.start.toString())
+        assertEquals("10:00",pending.roles!!.target.time!!.start.toString())
+        assertEquals("10:00",pending.exception.customTime!!.start.toString())
         val s = session(FrozenImportSource.fromFormat(r))
         val attachment = s.attachException(ReviewLocator(pendingIndex = 0),ExceptionAttachment.Bound(LogicalBaseReference.StoredLogicalBase("local",1,12,"base","fp")))
-        assertTrue(RichDraftConverter.convert(s,ImportReviewDecisions(evidence = evidence(s),attachments = listOf(attachment))) is ImportReviewResult.Blocked)
+        val intent = ready(s,ImportReviewDecisions(evidence = evidence(s),attachments = listOf(attachment))).exceptions.single()
+        assertEquals(LocalTime.parse("10:00"),(intent.targetTime as ReviewedTimeSpec.Continuous).range.start)
+        // The old-entry review carries the stated original clock, so the planner can remove only
+        // 08:00-08:45 instead of the whole stored logical interval.
+        assertEquals(LocalTime.parse("08:00"),intent.originalScope.time!!.start)
+        assertEquals(LocalTime.parse("08:45"),intent.originalScope.time!!.end)
     }
 
     @Test fun `new course materialized from extra retains explicit unknown metadata state`() {

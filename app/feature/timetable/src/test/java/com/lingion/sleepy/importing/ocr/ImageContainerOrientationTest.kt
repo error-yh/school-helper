@@ -28,6 +28,48 @@ class ImageContainerOrientationTest {
     }.array()
     private fun png(vararg payload: ByteArray): ByteArray = byteArrayOf(-119,80,78,71,13,10,26,10)+chunk("IHDR",ByteArray(13))+payload.fold(byteArrayOf()) { a,b -> a+chunk("eXIf",b) }+chunk("IEND",byteArrayOf())
     private fun read(bytes: ByteArray): Int = ImageContainerOrientation.read(ByteArrayInputStream(bytes),bytes.size.toLong())
+    private fun le32(value: Int) = byteArrayOf(value.toByte(),(value ushr 8).toByte(),(value ushr 16).toByte(),(value ushr 24).toByte())
+    private fun riff(vararg chunks: Pair<String, ByteArray>): ByteArray {
+        val body = ByteArrayOutputStream()
+        chunks.forEach { (name, data) ->
+            body.write(name.toByteArray()); body.write(le32(data.size)); body.write(data)
+            if (data.size % 2 == 1) body.write(0)
+        }
+        val payload = body.toByteArray()
+        return "RIFF".toByteArray() + le32(payload.size + 4) + "WEBP".toByteArray() + payload
+    }
+    private fun vp8x(flags: Int, width: Int = 100, height: Int = 60): ByteArray = ByteArray(10).also {
+        it[0] = flags.toByte()
+        val w = width - 1; val h = height - 1
+        it[4] = w.toByte(); it[5] = (w ushr 8).toByte(); it[6] = (w ushr 16).toByte()
+        it[7] = h.toByte(); it[8] = (h ushr 8).toByte(); it[9] = (h ushr 16).toByte()
+    }
+    @Test fun acceptsStaticWebpVariantsAndReadsOnlyBoundedExifOrientation() {
+        val lossy = riff("VP8 " to byteArrayOf(1,2,3))
+        val original = lossy.copyOf()
+        assertEquals(1, read(lossy))
+        assertArrayEquals(original, lossy)
+        assertEquals(6, read(riff("VP8 " to byteArrayOf(1,2,3),"EXIF" to ("Exif\u0000\u0000".toByteArray()+tiff(6)))))
+        assertEquals(8, read(riff("VP8X" to vp8x(0x08),"EXIF" to tiff(8),"VP8L" to byteArrayOf(0x2f,1,2))))
+        assertEquals(1, read(riff("VP8X" to vp8x(0x10),"ALPH" to byteArrayOf(0),"VP8 " to byteArrayOf(1,2))))
+        // A single trailing pad byte after the declared RIFF payload is tolerated.
+        assertEquals(1, read(lossy + byteArrayOf(0)))
+        // An undefined EXIF orientation stays identity, exactly like JPEG/PNG.
+        assertEquals(1, read(riff("VP8 " to byteArrayOf(1),"EXIF" to tiff(0))))
+    }
+    @Test fun rejectsAnimatedAndMalformedWebpInsteadOfDecodingAnArbitraryFrame() {
+        val animatedFlag = riff("VP8X" to vp8x(0x02),"VP8 " to byteArrayOf(1,2))
+        val animChunk = riff("VP8X" to vp8x(0x00),"ANIM" to ByteArray(6),"VP8 " to byteArrayOf(1,2))
+        val duplicateFrame = riff("VP8 " to byteArrayOf(1,2),"VP8 " to byteArrayOf(3,4))
+        val shortVp8x = riff("VP8X" to ByteArray(9))
+        val unknownRiff = "RIFF".toByteArray() + le32(8) + "WAVE".toByteArray()
+        val truncated = riff("VP8 " to byteArrayOf(1,2)).copyOf(10)
+        val wrongDeclaredSize = riff("VP8 " to byteArrayOf(1,2)).also { it[4] = (it[4] + 7).toByte() }
+        for (bytes in listOf(animatedFlag,animChunk,duplicateFrame,shortVp8x,unknownRiff,truncated,wrongDeclaredSize)) {
+            assertThrows(RasterException::class.java) { read(bytes) }
+        }
+        assertEquals(RasterFailure.UNSUPPORTED_FORMAT, (runCatching { read(animatedFlag) }.exceptionOrNull() as RasterException).code)
+    }
     @Test fun acceptsChatSavedJpegWithoutEoiWhileStructuralGarbageStillRejects() {
         val complete=jpeg(tiff(6))
         assertEquals(6,read(complete))

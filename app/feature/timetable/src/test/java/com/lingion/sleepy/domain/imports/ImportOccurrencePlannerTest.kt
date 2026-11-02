@@ -10,6 +10,9 @@ import com.lingion.sleepy.importing.RichExceptionDraft
 import com.lingion.sleepy.importing.RichExceptionKind
 import com.lingion.sleepy.importing.DraftTimeRange
 import com.lingion.sleepy.importing.formats.FormatParseResult
+import com.lingion.sleepy.importing.formats.FormatParseContext
+import com.lingion.sleepy.importing.formats.NoticeParseContext
+import com.lingion.sleepy.importing.formats.NoticeTimetableParser
 import com.lingion.sleepy.importing.formats.PendingExceptionAttachment
 import org.junit.Assert.*
 import org.junit.Test
@@ -45,8 +48,26 @@ class ImportOccurrencePlannerTest {
         return s.copy(courses=s.courses.filter { it.id !in p.removedCourseIds && updates.none { u->u.id==it.id } }+updates)
     }
     private fun ranges(s:TimetableSnapshot,date:LocalDate)=TimetableRules.occurrencesOn(s,date).flatMap { it.timeRanges }.sortedBy { it.start }
-    private fun notice(kind:RichExceptionKind,date:LocalDate=monday,target:LocalDate?=null,time:TimeRange?=null,sections:Set<Int>?=null)=
+    private fun notice(
+        kind:RichExceptionKind,date:LocalDate=monday,target:LocalDate?=null,time:TimeRange?=null,sections:Set<Int>?=null)=
         RichExceptionDraft(kind,date,target,time?.let { DraftTimeRange(it.start,it.end) },sections)
+
+    private fun noticeSession(s:TimetableSnapshot,text:String):ImportReviewSession {
+        val parsed=NoticeTimetableParser().parse(text,NoticeParseContext(FormatParseContext("notice-review-fix",20),s.settings.startDate!!))
+        return ImportReviewSession.create(FrozenImportSource.fromFormat(parsed),
+            ImportReviewContext(ImportTarget(s.scopeToken,s.settings.id,s.revision,3),ImportMode.APPEND,
+                s.settings.startDate?.let(TimetableRules::mondayOf),s.settings.totalWeeks,s.periods))
+    }
+    private fun reviewedNotice(s:TimetableSnapshot,text:String):ReviewedImport {
+        val session=noticeSession(s,text)
+        val base=ImportOccurrencePlanner.logicalBaseDetails(LoadedImportTarget(s,3)).single()
+        val attachment=session.attachException(ReviewLocator(pendingIndex=0),ExceptionAttachment.Bound(base.reference))
+        val decisions=ImportReviewDecisions(evidence=session.requirements.filter { it.kind==ReviewRequirementKind.EVIDENCE }.map { session.reviewEvidence(it.fingerprint) },
+            attachments=listOf(attachment))
+        val result=RichDraftConverter.convert(session,decisions)
+        assertTrue(result.toString(),result is ImportReviewResult.Ready)
+        return (result as ImportReviewResult.Ready).reviewed
+    }
 
     @Test fun `actual date subtraction avoids the weeks sections Cartesian bug`() {
         val s=snapshot(base(setOf(1),setOf(1)))
@@ -335,5 +356,34 @@ class ImportOccurrencePlannerTest {
         val p=ImportOccurrencePlanner.plan(reviewed,LoadedImportTarget(s,3))
         assertTrue(p.problems.toString(),p.ready);assertTrue(p.courses.single().state.adds.isEmpty())
         assertEquals(1,p.courses.single().state.groups.single().witnesses.size)
+    }
+    @Test fun `notice old clock removes only the stated part and keeps the rest`() {
+        val stored=CourseMeeting(id=10,day=1,weeks=setOf(1,2),sections=emptySet(),customTime=r("08:00","09:40"))
+        val s=snapshot(stored)
+        val p=ImportOccurrencePlanner.plan(reviewedNotice(s,"原2026-09-07 课程:Course 08:00-08:45 调至2026-09-08 10:00-10:45"),LoadedImportTarget(s,3))
+        assertTrue(p.problems.toString(),p.ready)
+        val a=after(s,p)
+        assertEquals(listOf(r("08:45","09:40")),ranges(a,monday))
+        assertEquals(listOf(r("10:00","10:45")),ranges(a,monday.plusDays(1)))
+        assertEquals(listOf(r("08:00","09:40")),ranges(a,monday.plusWeeks(1)))
+    }
+    @Test fun `a notice scope not owned by the base is rejected instead of removing everything`() {
+        val stored=CourseMeeting(id=10,day=1,weeks=setOf(1,2),sections=emptySet(),customTime=r("08:00","09:40"))
+        val s=snapshot(stored)
+        val p=ImportOccurrencePlanner.plan(reviewedNotice(s,"原2026-09-07 课程:Course 07:00-07:30 调至2026-09-08 10:00-10:45"),LoadedImportTarget(s,3))
+        assertFalse(p.ready)
+        assertTrue(p.problems.toString(),p.problems.any { it.code=="ORIGINAL_SCOPE_NOT_OWNED" })
+    }
+    @Test fun `an invalid old clock blocks the old entry instead of inheriting the whole base`() {
+        val stored=CourseMeeting(id=10,day=1,weeks=setOf(1,2),sections=emptySet(),customTime=r("08:00","09:40"))
+        val s=snapshot(stored)
+        val session=noticeSession(s,"原2026-09-07 课程:Course 25:00-26:00 调至2026-09-08 10:00-10:45")
+        val base=ImportOccurrencePlanner.logicalBaseDetails(LoadedImportTarget(s,3)).single()
+        val attachment=session.attachException(ReviewLocator(pendingIndex=0),ExceptionAttachment.Bound(base.reference))
+        val decisions=ImportReviewDecisions(evidence=session.requirements.filter { it.kind==ReviewRequirementKind.EVIDENCE }.map { session.reviewEvidence(it.fingerprint) },
+            attachments=listOf(attachment))
+        val result=RichDraftConverter.convert(session,decisions)
+        assertTrue(result.toString(),result is ImportReviewResult.Blocked)
+        assertTrue((result as ImportReviewResult.Blocked).problems.any { it.code=="ORIGINAL_TIME_INVALID_REQUIRES_CORRECTION" })
     }
 }

@@ -10,6 +10,50 @@ import org.junit.Test
 class NoticeTimetableParserTest {
     private val context=NoticeParseContext(FormatParseContext("invented-notice",30),LocalDate.of(2026,12,30))
     private fun parse(text:String,c:NoticeParseContext=context)=NoticeTimetableParser().parse(text,c)
+    @Test fun `reschedule roles keep old and new sections and times separate`() {
+        val r=parse("原2026-11-13示例数学由第3-4节(10:00-11:40)调整为第5-6节(14:00-15:40)")
+        val p=r.pendingExceptions.single()
+        val roles=requireNotNull(p.roles)
+        assertEquals(NoticeIntentKind.RESCHEDULE_TIME,roles.intent)
+        assertEquals(setOf(3,4),roles.original.sections)
+        assertEquals(setOf(5,6),roles.target.sections)
+        assertEquals("10:00",roles.original.time!!.start.toString())
+        assertEquals("11:40",roles.original.time!!.end.toString())
+        assertEquals("14:00",roles.target.time!!.start.toString())
+        // The legacy draft carries the target override only; sections are never merged into 3-6.
+        assertEquals(setOf(5,6),p.exception.sections)
+        assertEquals("14:00",p.exception.customTime!!.start.toString())
+        assertEquals(LocalDate.of(2026,11,13),p.exception.originalDate)
+        assertEquals(LocalDate.of(2026,11,13),p.exception.targetDate)
+        assertTrue(roles.sameDayAdjustment)
+        assertTrue(r.issues.none { it.code=="AMBIGUOUS_TIME_MAPPING" })
+    }
+
+    @Test fun `room keep and room change are explicit roles without rewriting the legacy draft`() {
+        val keep=parse("本周五示例数学由第3-4节调整为第5-6节，教室不变").pendingExceptions.single()
+        assertEquals(NoticeRoomRole.KEEP,keep.roles!!.room!!.role)
+        assertNull(keep.exception.room)
+        val change=parse("2026-11-13示例数学第3-4节教室改为B203").pendingExceptions.single()
+        assertEquals(NoticeIntentKind.ROOM_ONLY,change.roles!!.intent)
+        assertEquals(NoticeRoomRole.CHANGE,change.roles!!.room!!.role)
+        assertEquals("B203",change.roles!!.room!!.to)
+        assertEquals(setOf(3,4),change.roles!!.original.sections)
+        assertEquals("B203",change.exception.room)
+        assertEquals(LocalDate.of(2026,11,13),change.exception.originalDate)
+    }
+
+    @Test fun `old extra notice keeps its previous draft fields and only gains optional roles`() {
+        val r=parse("今日示例数学10:00-11:30在示例室A加课")
+        val p=r.pendingExceptions.single()
+        assertEquals(NoticeIntentKind.EXTRA,p.roles!!.intent)
+        assertEquals(RichExceptionKind.EXTRA,p.exception.kind)
+        assertEquals(LocalDate.of(2026,12,30),p.exception.targetDate)
+        assertEquals("10:00",p.exception.customTime!!.start.toString())
+        assertEquals("示例室A",p.exception.room)
+        assertEquals("示例数学",p.courseName)
+        assertNull(p.exception.sections)
+    }
+
     @Test fun `relative year transition is a review proposal and extra stays pending`() {
         val r=parse("明日示例数学10:00-11:30在示例室A加课")
         val p=r.relativeDates.single()

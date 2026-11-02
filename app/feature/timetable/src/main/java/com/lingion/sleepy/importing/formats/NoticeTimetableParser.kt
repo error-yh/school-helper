@@ -61,6 +61,56 @@ class NoticeTimetableParser {
                 room=places.firstOrNull()?.groupValues?.get(1)
                 if(places.size>1) issues+=mappingIssue("AMBIGUOUS_NOTICE_LABEL")
             }
+            // Room roles are consumed before operation verbs: "教室改为B" is a location change,
+            // not a reschedule verb, and "教室不变" is an explicit keep rather than silence.
+            var roomKeep=false
+            var roomFrom:String?=null
+            var roomTo:String?=null
+            matches(Regex("(?:原)?(?:教室|地点|实验室)(?:保持)?不变")).forEach { consume(it.range);roomKeep=true }
+            val roomRangeMatches=matches(Regex("(?:教室|地点|实验室)\\s*由\\s*([^，,。;；\\s]+?)\\s*(?:改为|调整为|调至|改至|变更为)\\s*([^，,。;；\\s]+)"))
+            roomRangeMatches.firstOrNull()?.let { first->
+                roomFrom=first.groupValues[1];roomTo=first.groupValues[2]
+                roomRangeMatches.forEach { consume(it.range) }
+            }
+            if(roomTo==null) {
+                val roomToMatches=matches(Regex("(?:教室|地点|实验室)\\s*(?:改为|调整为|调至|改至|变更为)\\s*([^，,。;；\\s]+)"))
+                roomToMatches.firstOrNull()?.let { first->
+                    roomTo=first.groupValues[1]
+                    roomToMatches.forEach { consume(it.range) }
+                }
+            }
+            if(roomTo!=null) room=roomTo else if(roomKeep) room=null
+            // "教室不变" and "教室改为X" contradict each other and stay unresolved.
+            if(roomKeep && roomTo!=null) { issues+=mappingIssue("AMBIGUOUS_NOTICE_LABEL");roomKeep=false;roomTo=null;room=null }
+            // 上午/下午第N大节 states a day part; it is not a clock and is never two guessed periods.
+            val bigMatch=matches(Regex("(上午|下午)\\s*(?:第?\\s*([一二三四1-4])\\s*大节)")).singleOrNull()
+            val bigSection=bigMatch?.let { m->
+                val ordinal=when(m.groupValues[2]) { "一"->1;"二"->2;"三"->3;"四"->4;else->m.groupValues[2].toInt() }
+                NoticeBigSection(if(m.groupValues[1]=="上午") NoticeDayPart.MORNING else NoticeDayPart.AFTERNOON,ordinal)
+            }
+            bigMatch?.let { consume(it.range) }
+            val bigRange=bigMatch?.range
+            // Operation verbs. "调整为"/"改为" are part of the user's own wording and were missing.
+            val rescheduleVerbs=setOf("调整为","调整至","调至","改至","改为")
+            val markerMatches=matches(Regex("调整为|调整至|调至|改至|改为|补课|加课|增加|新增|停课|取消"))
+                .filterNot { consumed[it.range.first] }
+            markerMatches.forEach { consume(it.range) }
+            val rescheduleMarkers=markerMatches.filter { it.value in rescheduleVerbs }
+            val marker=rescheduleMarkers.singleOrNull()
+            val kinds=markerMatches.map { when(it.value) {
+                in rescheduleVerbs -> RichExceptionKind.RESCHEDULE
+                "停课","取消" -> RichExceptionKind.CANCEL
+                else -> RichExceptionKind.EXTRA
+            } }.distinct()
+            if(kinds.size>1) issues+=mappingIssue("AMBIGUOUS_NOTICE_OPERATION")
+            var operation=kinds.singleOrNull()
+            // A standalone "教室改为B" is a one-occurrence location change even without a verb.
+            if(operation==null && roomTo!=null) operation=RichExceptionKind.RESCHEDULE
+            if(operation==RichExceptionKind.RESCHEDULE) {
+                matches(Regex("由原来的|由原本的|原来的|原本的")).forEach { consume(it.range) }
+            }
+            fun beforeMarker(range:IntRange)=marker!=null && range.last<marker.range.first
+            fun afterMarker(range:IntRange)=marker!=null && range.first>marker.range.last
             // At most one seconds component is lexical clock syntax; colon boundaries prevent
             // an unsupported longer token from exposing a shorter valid-looking clock suffix.
             val timeMatches=matches(Regex("(?<![0-9:])\\d+:\\d+(?::\\d+)?\\s*[-~～至]\\s*\\d+:\\d+(?::\\d+)?(?![0-9:])"))
@@ -77,7 +127,11 @@ class NoticeTimetableParser {
                 var i=0
                 while(i<raw.length) {
                     format.cancellation.check()
-                    if(dateOrClock[i] || raw[i] !in "0123456789第+-" || i>0 && raw[i-1] in "0123456789第:/+.至-~～—－") { i++; continue }
+                    // "调整至/调至/改至" end with a range separator; the following "第N-M节" is a
+                    // real declaration, not the tail of a range.
+                    val afterRescheduleVerb = i >= 2 && raw[i-1] == '至' && raw[i-2] in "调整改"
+                    val blockedByPrevious = i>0 && raw[i-1] in "0123456789第:/+.至-~～—－" && !afterRescheduleVerb
+                    if(dateOrClock[i] || raw[i] !in "0123456789第+-" || blockedByPrevious) { i++; continue }
                     val start=i
                     var end:Int?=null
                     while(i<raw.length && !dateOrClock[i]) {
@@ -125,20 +179,65 @@ class NoticeTimetableParser {
                 val parsed=WeekExpressionParser.parse(m.value,format.maxWeek)
                 if(parsed.errors.isNotEmpty()) issues+=mappingIssue("INVALID_WEEKS") else weeks+=parsed.weeks
             }
-            val sectionMatches=numericDeclarations('节')
-            val sections=linkedSetOf<Int>()
-            for(m in sectionMatches) {
-                format.cancellation.check(); consume(m.range)
-                val parsed=WeekExpressionParser.parse(m.value.removeSuffix("节"),100)
-                if(parsed.errors.isNotEmpty()) issues+=mappingIssue("INVALID_SECTIONS") else sections+=parsed.weeks
+            var originalSectionsInvalid=false
+            var targetSectionsInvalid=false
+            val sectionDeclarations=numericDeclarations('节').map { match->
+                format.cancellation.check();consume(match.range)
+                val parsed=WeekExpressionParser.parse(match.value.removeSuffix("节"),100)
+                if(parsed.errors.isNotEmpty()) {
+                    issues+=mappingIssue("INVALID_SECTIONS")
+                    // The malformed declaration keeps its lexical side so the role can be corrected.
+                    if(marker!=null) { if(beforeMarker(match.range)) originalSectionsInvalid=true else targetSectionsInvalid=true }
+                    else if(operation==RichExceptionKind.EXTRA) targetSectionsInvalid=true else originalSectionsInvalid=true
+                    match.range to emptySet<Int>()
+                } else match.range to parsed.weeks
             }
-            timeMatches.forEach { consume(it.range) }
-            var time:DraftTimeRange?=null
-            if(timeMatches.size==1) {
-                val pair=timeMatches.single().value.split(Regex("\\s*[-~～至]\\s*"))
+            val allSections=sectionDeclarations.flatMap { it.second }.toSet()
+            // Old sections are a match condition; target sections are the override. A one-occurrence
+            // room/date change without a reschedule verb keeps the declared sections as the old scope.
+            val originalSections=when {
+                marker!=null -> sectionDeclarations.filter { beforeMarker(it.first) }.flatMap { it.second }.toSet()
+                operation==RichExceptionKind.CANCEL || operation==RichExceptionKind.RESCHEDULE -> allSections
+                else -> emptySet()
+            }
+            val targetSections=when {
+                marker!=null -> sectionDeclarations.filter { afterMarker(it.first) }.flatMap { it.second }.toSet()
+                operation==RichExceptionKind.EXTRA -> allSections
+                else -> emptySet()
+            }
+            val sections=when(operation) { RichExceptionKind.RESCHEDULE -> targetSections; else -> allSections }
+            var originalTimeInvalid=false
+            var targetTimeInvalid=false
+            val parsedTimes=timeMatches.map { match->
+                consume(match.range)
+                val pair=match.value.split(Regex("\\s*[-~～至]\\s*"))
                 val a=exactTime(pair[0]); val b=exactTime(pair[1])
-                if(a!=null && b!=null && b>a) time=DraftTimeRange(a,b) else issues+=mappingIssue("INVALID_TIME")
-            } else if(timeMatches.size>1) issues+=mappingIssue("AMBIGUOUS_TIME_MAPPING")
+                if(a!=null && b!=null && b>a) match.range to DraftTimeRange(a,b)
+                else {
+                    issues+=mappingIssue("INVALID_TIME")
+                    if(marker!=null) { if(beforeMarker(match.range)) originalTimeInvalid=true else targetTimeInvalid=true }
+                    else if(operation==RichExceptionKind.EXTRA) targetTimeInvalid=true else originalTimeInvalid=true
+                    match.range to null
+                }
+            }
+            val originalTimes=when {
+                marker!=null -> parsedTimes.filter { beforeMarker(it.first) }.mapNotNull { it.second }
+                operation==RichExceptionKind.CANCEL || operation==RichExceptionKind.RESCHEDULE -> parsedTimes.mapNotNull { it.second }
+                else -> emptyList()
+            }
+            val targetTimes=when {
+                marker!=null -> parsedTimes.filter { afterMarker(it.first) }.mapNotNull { it.second }
+                operation==RichExceptionKind.EXTRA -> parsedTimes.mapNotNull { it.second }
+                else -> emptyList()
+            }
+            val allTimes=parsedTimes.mapNotNull { it.second }
+            if(originalTimes.size>1 || targetTimes.size>1) issues+=mappingIssue("AMBIGUOUS_TIME_MAPPING")
+            val time=when(operation) {
+                // Only the target time overrides; an old time is a match condition, never an override.
+                RichExceptionKind.RESCHEDULE -> if(targetTimes.size==1) targetTimes.single() else null
+                else -> if(allTimes.size==1) allTimes.single()
+                    else { if(allTimes.size>1) issues+=mappingIssue("AMBIGUOUS_TIME_MAPPING");null }
+            }
 
             // Null slots keep invalid declarations in their original/target lexical positions.
             val dateDeclarations=fullDates.map { m ->
@@ -186,17 +285,11 @@ class NoticeTimetableParser {
             }
             if(relative.any { it.source==source }) issues+=mappingIssue("RELATIVE_DATE_REVIEW")
             if(declaredDay!=null && relativeDate!=null && relativeDate.dayOfWeek.value!=declaredDay) issues+=mappingIssue("DATE_WEEKDAY_MISMATCH")
-            val markerMatches=matches(Regex("调至|调整至|改至|补课|加课|增加|新增|停课|取消"))
-            markerMatches.forEach { consume(it.range) }
-            val kinds=markerMatches.map { when(it.value) { "调至","调整至","改至" -> RichExceptionKind.RESCHEDULE; "停课","取消" -> RichExceptionKind.CANCEL; else -> RichExceptionKind.EXTRA } }.distinct()
-            if(kinds.size>1) issues+=mappingIssue("AMBIGUOUS_NOTICE_OPERATION")
-            val operation=kinds.singleOrNull()
-            val rescheduleMarkers=markerMatches.filter { it.value in setOf("调至","调整至","改至") }
-            val rescheduleMarker=rescheduleMarkers.singleOrNull()
-            val originalDates=rescheduleMarker?.let { marker -> dateDeclarations.filter { it.first.last<marker.range.first } }.orEmpty()
-            val targetDates=rescheduleMarker?.let { marker -> dateDeclarations.filter { it.first.first>marker.range.last } }.orEmpty()
+            val originalDates=marker?.let { currentMarker -> dateDeclarations.filter { it.first.last<currentMarker.range.first } }.orEmpty()
+            val targetDates=marker?.let { currentMarker -> dateDeclarations.filter { it.first.first>currentMarker.range.last } }.orEmpty()
             val ambiguousDates=when(operation) {
-                RichExceptionKind.RESCHEDULE -> rescheduleMarkers.size!=1 || originalDates.size>1 || targetDates.size>1
+                RichExceptionKind.RESCHEDULE -> if(marker==null) dateDeclarations.size>1
+                    else rescheduleMarkers.size!=1 || originalDates.size>1 || targetDates.size>1
                 RichExceptionKind.CANCEL,RichExceptionKind.EXTRA -> dateDeclarations.size>1
                 null -> false
             }
@@ -212,17 +305,54 @@ class NoticeTimetableParser {
             }
             flush()
             val uncertainty=setOf("上午","下午","晚上","中午","傍晚")
-            val name=explicitCourse ?: fragments.firstOrNull { it !in uncertainty && !it.contains("另行通知") && !it.contains("安排") }.orEmpty()
-            val remains=fragments.filter { it!=name || explicitCourse!=null }
+            val candidateName=fragments.firstOrNull { it !in uncertainty && !it.contains("另行通知") && !it.contains("安排") }.orEmpty()
+            val name=explicitCourse ?: cleanNoticeName(candidateName)
+            val remains=fragments.filter { it!=(if(explicitCourse==null) candidateName else name) || explicitCourse!=null }
             if(remains.isNotEmpty()) unparsed+=source.copy(rawText=remains.joinToString(" "))
             if(uncertainty.any { raw.contains(it) }) issues+=mappingIssue("UNRESOLVED_TIME_OF_DAY")
             if(operation!=null) {
                 if(pending.size>=format.limits.maxExceptions) reject("LIMIT_EXCEEDED")
-                val original=if(ambiguousDates) null else when(operation) { RichExceptionKind.CANCEL -> if(dateDeclarations.isEmpty()) relativeDate else dateDeclarations.single().second; RichExceptionKind.RESCHEDULE -> originalDates.singleOrNull()?.second; RichExceptionKind.EXTRA -> null }
+                val original=if(ambiguousDates) null else when(operation) {
+                    RichExceptionKind.CANCEL -> if(dateDeclarations.isEmpty()) relativeDate else dateDeclarations.single().second
+                    // A room-only change has no reschedule verb; its declared date is the original one.
+                    RichExceptionKind.RESCHEDULE -> if(marker==null) (if(dateDeclarations.isEmpty()) relativeDate else dateDeclarations.singleOrNull()?.second)
+                        else originalDates.singleOrNull()?.second
+                    RichExceptionKind.EXTRA -> null
+                }
                 val target=if(ambiguousDates) null else when(operation) { RichExceptionKind.EXTRA -> if(dateDeclarations.isEmpty()) relativeDate else dateDeclarations.single().second; RichExceptionKind.RESCHEDULE -> targetDates.singleOrNull()?.second; RichExceptionKind.CANCEL -> null }
-                val missing=buildSet { if(operation!=RichExceptionKind.EXTRA && original==null) add(ImportField.ORIGINAL_DATE); if(operation!=RichExceptionKind.CANCEL && target==null) add(ImportField.TARGET_DATE); if(name.isBlank()) add(ImportField.COURSE_NAME) }
-                val e=RichExceptionDraft(operation,original,target,time,sections.takeIf { it.isNotEmpty() },teacher,room,project,group,warnings=listOf(mappingIssue("PENDING_EXCEPTION_ATTACHMENT")),missingFields=missing)
-                pending+=PendingExceptionAttachment(exception=e,sources=listOf(source),reason="EXPLICIT_ATTACHMENT_REQUIRED",courseName=name.takeIf { it.isNotBlank() },teacher=teacher,room=room,group=group,experimentProject=project,declaredWeeks=weeks.toSet(),dayOfWeek=declaredDay)
+                // A same-day time/section/room change keeps the original date as its target date.
+                val sameDayTarget=operation==RichExceptionKind.RESCHEDULE && original!=null && target==null && !ambiguousDates &&
+                    (targetSections.isNotEmpty() || targetTimes.isNotEmpty() || roomTo!=null)
+                val resolvedTarget=target ?: if(sameDayTarget) original else null
+                val missing=buildSet { if(operation!=RichExceptionKind.EXTRA && original==null) add(ImportField.ORIGINAL_DATE); if(operation!=RichExceptionKind.CANCEL && resolvedTarget==null) add(ImportField.TARGET_DATE); if(name.isBlank()) add(ImportField.COURSE_NAME) }
+                val draftSections=when(operation) {
+                    RichExceptionKind.RESCHEDULE -> targetSections.takeIf { it.isNotEmpty() }
+                    else -> allSections.takeIf { it.isNotEmpty() }
+                }
+                val draftRoom=when(operation) { RichExceptionKind.CANCEL -> room; else -> roomTo ?: if(roomKeep) null else room }
+                val intent=when(operation) {
+                    RichExceptionKind.CANCEL -> NoticeIntentKind.CANCEL
+                    RichExceptionKind.EXTRA -> NoticeIntentKind.EXTRA
+                    RichExceptionKind.RESCHEDULE -> when {
+                        resolvedTarget!=null && original!=null && resolvedTarget!=original -> NoticeIntentKind.CHANGE_DATE
+                        roomTo!=null && targetSections.isEmpty() && targetTimes.isEmpty() -> NoticeIntentKind.ROOM_ONLY
+                        else -> NoticeIntentKind.RESCHEDULE_TIME
+                    }
+                }
+                val roles=NoticeExceptionRoles(
+                    intent=intent,
+                    original=NoticeScope(originalSections, originalTimes.singleOrNull()),
+                    target=NoticeScope(targetSections, targetTimes.singleOrNull()),
+                    room=when { roomTo!=null -> NoticeRoomChange(NoticeRoomRole.CHANGE, roomFrom ?: room, roomTo); roomKeep -> NoticeRoomChange(NoticeRoomRole.KEEP); else -> null },
+                    bigSection=bigSection?.copy(originalSide = bigRange!=null && marker!=null && bigRange.last<marker.range.first),
+                    sameDayAdjustment=sameDayTarget,
+                    originalTimeInvalid=originalTimeInvalid,
+                    originalSectionsInvalid=originalSectionsInvalid,
+                    targetTimeInvalid=targetTimeInvalid,
+                    targetSectionsInvalid=targetSectionsInvalid,
+                )
+                val e=RichExceptionDraft(operation,original,resolvedTarget,time,draftSections,teacher,draftRoom,project,group,warnings=listOf(mappingIssue("PENDING_EXCEPTION_ATTACHMENT")),missingFields=missing)
+                pending+=PendingExceptionAttachment(exception=e,sources=listOf(source),reason="EXPLICIT_ATTACHMENT_REQUIRED",courseName=name.takeIf { it.isNotBlank() },teacher=teacher,room=room,group=group,experimentProject=project,declaredWeeks=weeks.toSet(),dayOfWeek=declaredDay,roles=roles)
                 issues+=mappingIssue("PENDING_EXCEPTION_ATTACHMENT")
             } else if(kinds.isEmpty() && name.isNotBlank() && (weeks.isNotEmpty() || dates.isNotEmpty()) && (sections.isNotEmpty() || time!=null)) {
                 if(courses.size>=format.limits.maxCourses || courses.size>=format.limits.maxMeetings) reject("LIMIT_EXCEEDED")
@@ -230,6 +360,14 @@ class NoticeTimetableParser {
                 courses+=RichCourseDraft(name,meetings=listOf(RichMeetingDraft(kind,declaredDay,weeks.toSet(),sections.toSet(),time,dates.toSet(),teacher,room,group,project,name.contains("实验"),warnings=listOf(mappingIssue("NOTICE_REVIEW_REQUIRED")))))
                 issues+=mappingIssue("NOTICE_REVIEW_REQUIRED")
             } else { if(unparsed.none { it.sourceLocator==source.sourceLocator && it.rawText==raw }) unparsed+=source; issues+=mappingIssue("UNPARSED_NOTICE") }
+        }
+
+        /** The unlabeled title is only a lookup hint; drop connective "的" and a trailing "课程". */
+        private fun cleanNoticeName(value:String):String {
+            var name=value.trim()
+            if(name.startsWith("的")) name=name.drop(1)
+            name=name.removeSuffix("课程").trim()
+            return name.ifBlank { value.trim() }
         }
 
         fun safeDate(block:()->LocalDate):LocalDate? = try {
