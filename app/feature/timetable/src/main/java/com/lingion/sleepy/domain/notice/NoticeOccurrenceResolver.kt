@@ -175,9 +175,25 @@ object NoticeOccurrenceResolver {
         return envelope == expected
     }
 
-    private fun sameShape(meeting: CourseMeeting, base: CourseMeeting): Boolean =
-        meeting.kind == base.kind && meeting.day == base.day && meeting.weeks == base.weeks &&
-            meeting.dates == base.dates && meeting.sections == base.sections && meeting.customTime == base.customTime
+    private fun sameShape(meeting: CourseMeeting, base: CourseMeeting): Boolean {
+        if (meeting.kind != base.kind) return false
+        val sameDay = when (meeting.kind) {
+            com.lingion.sleepy.domain.model.MeetingKind.DATE_SPECIFIC -> meeting.day == base.day || meeting.day == 0 || base.day == 0
+            else -> meeting.day == base.day
+        }
+        if (!sameDay || meeting.weeks != base.weeks || meeting.dates != base.dates) {
+            return false
+        }
+        if (meeting.sections == base.sections && meeting.customTime == base.customTime) {
+            return true
+        }
+        // 当逻辑原始包含明确的自定义时钟范围时，planner.reconstruct 会生成 sections 为空的 customTime 物理行，
+        // 逻辑原始则保留原始导入的 sections；此时只要两者有效 customTime 一致且物理行 sections 为空，即视为同一形状。
+        if (base.customTime != null && meeting.customTime == base.customTime && meeting.sections.isEmpty()) {
+            return true
+        }
+        return false
+    }
 
     /** Shape is only a filter; the logical identity's teacher/room/project/group must also agree. */
     private fun identityMatches(

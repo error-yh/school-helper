@@ -82,7 +82,7 @@ class CaptchaActivity : Activity() {
                     @JavascriptInterface
                     fun onCaptcha(dataJson: String) {
                         runOnUiThread {
-                            AppLog.d("AggApp", "jd captcha result: ${dataJson.take(200)}")
+                            AppLog.d("AggApp", "jd captcha result: [RECEIVED, len=${dataJson.length}]")
                             onResult?.invoke(dataJson)
                             onResult = null
                             finish()

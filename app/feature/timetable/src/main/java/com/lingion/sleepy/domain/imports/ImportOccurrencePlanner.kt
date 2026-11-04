@@ -120,14 +120,36 @@ internal object ImportOccurrencePlanner {
             return EngineResult(fList(writes),fSet(removed),fList(conflicts),fList(problems),writes.isEmpty()&&removed.isEmpty(),sourceRelationRequired)
         }
 
+        private fun isCourseIdentityCandidate(c: WorkCourse, input: ReviewedCourse): Boolean {
+            val inputName = input.identity.name.trim()
+            if (inputName.isEmpty() || c.metadata.courseName.trim() != inputName) return false
+            val inputCourseCode = input.identity.sourceCourseCode?.trim()?.takeIf { it.isNotEmpty() }
+            val inputClassCode = input.identity.sourceClassCode?.trim()?.takeIf { it.isNotEmpty() }
+            val cCourseCode = c.metadata.sourceCourseCode?.trim()?.takeIf { it.isNotEmpty() }
+            val cClassCode = c.metadata.sourceClassCode?.trim()?.takeIf { it.isNotEmpty() }
+            if (inputCourseCode != null && cCourseCode != null && inputCourseCode != cCourseCode) return false
+            if (inputClassCode != null && cClassCode != null && inputClassCode != cClassCode) return false
+            return true
+        }
+
+        private fun unambiguousMatchingStoredCourse(input: ReviewedCourse): WorkCourse? {
+            if (reviewed.context.mode != ImportMode.APPEND) return null
+            val candidates = loadedCourses.filter { isCourseIdentityCandidate(it, input) }
+            if (candidates.size == 1) return candidates.single()
+            if (candidates.isEmpty()) return null
+            val inputDescriptors = input.meetings.map { m ->
+                val dummyWork = WorkCourse("probe", null, CourseDraft(input.identity.name.trim(), input.identity.teacher.trim(), input.identity.room.trim(), input.identity.color, emptyList(), input.identity.sourceCourseCode, input.identity.sourceClassCode, emptyList()))
+                reviewedOriginal(input, m, dummyWork, budget, reviewed.context).descriptorFingerprint
+            }.toSet()
+            if (inputDescriptors.isEmpty()) return null
+            val matchingCandidates = candidates.filter { c ->
+                c.originals.any { o -> o.descriptorFingerprint in inputDescriptors }
+            }
+            return if (matchingCandidates.size == 1) matchingCandidates.single() else null
+        }
+
         private fun checkArchiveMembership() {
             if(reviewed.context.mode!=ImportMode.APPEND || reviewed.decisions.identity?.kind !in setOf(IdentityReviewKind.INDEPENDENT,IdentityReviewKind.PARTITION,IdentityReviewKind.MERGE)) return
-            // ReviewLocator positions are zero-based inside ONE frozen source, so an unrelated file can
-            // report the same position. Content decides membership: a position whose stored content
-            // matches reuses that archive, and one whose stored content differs is either a changed
-            // member of the SAME source or a course of a DIFFERENT source. Nothing in the stored
-            // evidence names the file, so that question is never guessed here; it stays unresolved
-            // until the reviewer answers once for the whole import.
             val differentSource=reviewed.decisions.sourceRelation?.choice==SourceRelationChoice.DIFFERENT_SOURCE
             val ownerGroup=mutableMapOf<Long,Int>()
             for((group,input) in reviewed.courses.withIndex()) {
@@ -138,8 +160,6 @@ internal object ImportOccurrencePlanner {
                     if(historical.isEmpty()) { unmatched=true;continue }
                     val matching=historical.filter { it.second.contentFingerprint==aliasFingerprint(m) }
                     if(matching.isEmpty()) {
-                        // A different source owns this position instead; it neither joins nor shadows
-                        // the stored archive, so it must not count as an unmatched archive member.
                         if(differentSource) continue
                         sourceRelationRequired=true;unmatched=true
                         problems+=OccurrencePlanProblem("ARCHIVE_MEMBERSHIP_REVIEW_REQUIRED",m.source)
@@ -157,19 +177,52 @@ internal object ImportOccurrencePlanner {
         }
 
         private fun addInputs() {
+            val courseArchiveMatches = mutableMapOf<Int, WorkCourse>()
+            val claimedStoredIds = mutableSetOf<Long>()
+            val conflictingStoredIds = mutableSetOf<Long>()
+            for ((ci, input) in reviewed.courses.withIndex()) {
+                val matched = input.existingArchive?.let { ref -> findStored(ref, ReviewLocator(courseIndex = ci))?.first }
+                    ?: unambiguousMatchingStoredCourse(input)
+                if (matched != null && matched.id != null) {
+                    if (!claimedStoredIds.add(matched.id)) {
+                        conflictingStoredIds.add(matched.id)
+                    }
+                    courseArchiveMatches[ci] = matched
+                }
+            }
+            for ((ci, matched) in courseArchiveMatches.toList()) {
+                if (matched.id in conflictingStoredIds && reviewed.courses[ci].existingArchive == null) {
+                    courseArchiveMatches.remove(ci)
+                }
+            }
+
             for((ci,input) in reviewed.courses.withIndex()) {
                 val stored=input.existingArchive?.let { ref->findStored(ref,ReviewLocator(courseIndex=ci))?.first }
                 val meta=stored?.metadata ?: CourseDraft(input.identity.name.trim(),input.identity.teacher.trim(),input.identity.room.trim(),input.identity.color,emptyList(),input.identity.sourceCourseCode,input.identity.sourceClassCode,fList(input.provenance))
                 val key=stored?.key ?: "input:$ci"
                 val work=stored ?: WorkCourse(key,null,meta)
                 if(stored==null) courses+=work
+                val targetStored = courseArchiveMatches[ci]
                 for(m in input.meetings) {
                     if(m.source in skipped) { inputBindings[m.source]=null;continue }
                     val original=reviewedOriginal(input,m,work,budget,reviewed.context)
                     val rawFingerprint=aliasFingerprint(m)
                     val separate=reviewed.decisions.identity?.kind in setOf(IdentityReviewKind.INDEPENDENT,IdentityReviewKind.PARTITION)
-                    fun eligible(c:WorkCourse,o:LogicalOriginal):Boolean = !separate || c===work || c.id!=null && c.sources.any { it.familyId==o.familyId && it.position==m.source && it.contentFingerprint==rawFingerprint }
-                    val exact=courses.flatMap { c->c.originals.map { c to it } }.firstOrNull { (c,o)->eligible(c,o) && o.descriptorFingerprint==original.descriptorFingerprint }
+                    fun eligible(c:WorkCourse,o:LogicalOriginal):Boolean =
+                        !separate || c===work || (targetStored!=null && c===targetStored) ||
+                        (c.id!=null && isCourseIdentityCandidate(c,input) && o.descriptorFingerprint==original.descriptorFingerprint) ||
+                        (c.id!=null && c.sources.any { it.familyId==o.familyId && it.position==m.source && it.contentFingerprint==rawFingerprint })
+                    val exactCandidates = courses.flatMap { c -> c.originals.map { c to it } }.filter { (c, o) -> eligible(c, o) && o.descriptorFingerprint == original.descriptorFingerprint }
+                    val ownedCandidates = exactCandidates.filter { (c, o) ->
+                        c.sources.any { it.familyId == o.familyId && it.position == m.source && it.contentFingerprint == rawFingerprint }
+                    }
+                    val distinctStoredOwners = exactCandidates.mapNotNull { it.first.id }.distinct()
+                    val exact = when {
+                        ownedCandidates.isNotEmpty() -> ownedCandidates.first()
+                        stored != null -> exactCandidates.firstOrNull { it.first === stored }
+                        distinctStoredOwners.size <= 1 -> exactCandidates.firstOrNull()
+                        else -> null
+                    }
                     if(exact!=null) {
                         val ownedAlias=exact.first.sources.any { it.familyId==exact.second.familyId && it.position==m.source && it.contentFingerprint==rawFingerprint }
                         // Historical input aliases are explicit lineage. Ordinary absorption is NOT binding.
@@ -181,12 +234,20 @@ internal object ImportOccurrencePlanner {
                                     exact.first.removes.filter { it.familyId==exact.second.familyId && it.scope.date==atom.date }.map { it.scope.range }
                                 ImportResidualBuilder.subtract(atom.range,cuts).map { range->budget.atom(atom.date);DatedInterval(atom.date,range) }
                             }
+                            val authorizedToRestore = ownedAlias || exact.first.id == null || exact.first === stored
                             if(restored.isNotEmpty()) {
-                                restored.forEach { restoredSources[exact.second.familyId to it]=m.source }
-                                val index=exact.first.originals.indexOf(exact.second)
-                                val updated=exact.second.copy(allocated=fList(exact.second.allocated+restored))
-                                exact.first.originals[index]=updated
-                                if(inputBindings[m.source]!=null) inputBindings[m.source]=exact.first to updated
+                                if(authorizedToRestore) {
+                                    restored.forEach { restoredSources[exact.second.familyId to it]=m.source }
+                                    val index=exact.first.originals.indexOf(exact.second)
+                                    val updated=exact.second.copy(allocated=fList(exact.second.allocated+restored))
+                                    exact.first.originals[index]=updated
+                                    if(inputBindings[m.source]!=null) inputBindings[m.source]=exact.first to updated
+                                } else {
+                                    val accepted=original.copy(allocated=fList(restored))
+                                    work.originals+=accepted;incomingFamilies+=accepted.familyId
+                                    work.sources+=SourceContentReference(accepted.familyId,m.source,aliasFingerprint(m))
+                                    inputBindings[m.source]=work to accepted
+                                }
                             }
                         }
                         continue

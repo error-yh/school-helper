@@ -243,4 +243,23 @@ class NoticeReviewFixTest {
         assertFalse(intent.requiresCorrection)
         assertEquals(1, TimetableRules.occurrencesOn(snapshot, LocalDate.of(2026, 11, 20)).size)
     }
+
+    @Test fun `occurrence resolver matches when physical meeting has empty sections and normalized zero day but base retains imported sections and day under custom clock`() {
+        // 物理落地行：按 planner.reconstruct 规范化，kind=DATE_SPECIFIC 时 day=0，明确时钟下 sections 为空
+        val physicalMeeting = NoticeFixtures.meeting(id = 11, day = 0, sections = emptySet(), customTime = custom, room = "信工楼401", teacher = "张老师", kind = com.lingion.sleepy.domain.model.MeetingKind.DATE_SPECIFIC, dates = setOf(friday), weeks = emptySet())
+        val course = course(physicalMeeting, teacher = "张老师", room = "信工楼401", name = "Hadoop大数据实验")
+        val snapshot = NoticeFixtures.snapshot(listOf(course))
+
+        // 逻辑原始 base：保留了 OCR/导入解析的原始星期 day=5、节次 sections=setOf(1, 2) 以及 customTime
+        val importedOriginal = physicalMeeting.copy(day = 5, sections = setOf(1, 2))
+        val base = NoticeFixtures.base(course, importedOriginal)
+
+        val intent = NoticeFixtures.intent("2026-11-13Hadoop大数据实验教室改为信工实验楼502")
+        val resolved = NoticeOccurrenceResolver.resolve(intent, snapshot, listOf(base), NoticeFixtures.target(snapshot))
+        val candidate = NoticeFixtures.candidates(resolved).single()
+
+        assertEquals(course.id, candidate.id.courseId)
+        assertEquals("信工楼401", candidate.currentRoom)
+        assertEquals(listOf(custom), candidate.currentRanges)
+    }
 }

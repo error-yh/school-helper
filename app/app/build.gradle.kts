@@ -6,6 +6,14 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+val rawArmOnly = project.findProperty("schoolHelperArmOnly")?.toString()?.trim()
+val schoolHelperArmOnly: Boolean = when {
+    rawArmOnly.isNullOrEmpty() -> false
+    rawArmOnly.equals("true", ignoreCase = true) -> true
+    rawArmOnly.equals("false", ignoreCase = true) -> false
+    else -> throw GradleException("Invalid property value for schoolHelperArmOnly: '$rawArmOnly'. Must be 'true' or 'false'.")
+}
+
 android {
     namespace = "com.aggapp.app"
     compileSdk = 36
@@ -17,6 +25,12 @@ android {
         versionCode = 2
         versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        if (schoolHelperArmOnly) {
+            ndk {
+                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            }
+        }
     }
     buildToolsVersion = "34.0.0"
 
@@ -69,7 +83,6 @@ dependencies {
     implementation(project(":platform:taobao"))
     implementation(project(":platform:jd"))
     implementation(project(":platform:sf"))
-    implementation(project(":platform:ryll"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

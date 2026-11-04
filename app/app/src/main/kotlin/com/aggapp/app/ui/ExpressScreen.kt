@@ -97,7 +97,7 @@ fun ExpressScreen(viewModel: ExpressViewModel = hiltViewModel()) {
                     )
                 }
                 // 手动刷新
-                IconButton(onClick = viewModel::refresh, enabled = !ui.loading) {
+                IconButton(onClick = { viewModel.refresh(force = true) }, enabled = !ui.loading) {
                     if (ui.loading) {
                         CircularProgressIndicator(
                             Modifier.size(20.dp),
@@ -187,10 +187,6 @@ fun ExpressScreen(viewModel: ExpressViewModel = hiltViewModel()) {
                             }
                         }
                     }
-                    ui.searchDetail?.let { d ->
-                        Spacer(Modifier.height(8.dp))
-                        RyllDetailCard(d)
-                    }
                     ui.searchNotice?.let { notice ->
                         Spacer(Modifier.height(12.dp))
                         Text(
@@ -257,7 +253,7 @@ fun ExpressScreen(viewModel: ExpressViewModel = hiltViewModel()) {
                 ) {
                     Text(ui.error ?: "未知错误", color = MaterialTheme.colorScheme.error)
                     Spacer(Modifier.height(8.dp))
-                    Button(onClick = viewModel::refresh, shape = RoundedCornerShape(12.dp)) { Text("重试") }
+                    Button(onClick = { viewModel.refresh(force = true) }, shape = RoundedCornerShape(12.dp)) { Text("重试") }
                 }
 
                 ui.stations.isEmpty() -> Text(
@@ -386,73 +382,3 @@ private fun ExpressItemRow(item: com.aggapp.core.model.ExpressItem) {
 
 private val timeFmt = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
 private fun fmtTime(ms: Long): String = timeFmt.format(Date(ms))
-
-/** 如意邻里查件详情卡（orderDetailByWayBillNo，2026-09-29 实测）：状态 + 收寄件 + 轨迹时间线 */
-@Composable
-private fun RyllDetailCard(d: com.aggapp.platform.ryll.RyllOrderDetail) {
-    var expanded by remember { mutableStateOf(false) }
-    Card(
-        Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(d.mailNo, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                Text(
-                    d.statusName.ifBlank { "查询成功" },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (d.atStation) Brand.Indigo else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                listOfNotNull(
-                    "${d.fromCity.orEmpty()} → ${d.toCity.orEmpty()}".ifBlank { null },
-                    d.senderName?.let { "寄 $it" },
-                    d.receiverName?.let { "收 $it" },
-                ).joinToString("  ·  "),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            d.pickupCode?.takeIf { it.isNotBlank() }?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "取件码 $it",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    color = Brand.Indigo,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(6.dp))
-            val tracks = if (expanded) d.tracks else d.tracks.take(3)
-            tracks.forEach { t ->
-                Column(Modifier.padding(vertical = 4.dp)) {
-                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        Text(t.opName.orEmpty(), style = MaterialTheme.typography.labelMedium)
-                        Text(
-                            t.opTime.orEmpty(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    t.description?.takeIf { it.isNotBlank() }?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-            if (d.tracks.size > 3) {
-                androidx.compose.material3.TextButton(onClick = { expanded = !expanded }) {
-                    Text(if (expanded) "收起轨迹" else "展开全部 ${d.tracks.size} 条轨迹")
-                }
-            }
-        }
-    }
-}

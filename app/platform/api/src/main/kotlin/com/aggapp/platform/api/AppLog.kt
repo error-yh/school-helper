@@ -5,6 +5,7 @@ package com.aggapp.platform.api
  *
  * 目的：真机排查时无需 adb logcat——「我的」页底部日志板块直接展示/复制全部日志。
  * - [d]/[e]/[w] 记录到内存环（容量 [CAP] 行，超限丢弃最旧），同时可选镜像到 logcat；
+ * - 所有输出经 [LogSanitizer] 安全脱敏，防护覆盖内存环、logcatSink、fileSink 与 onLog 回调；
  * - [dump] 按时间序导出全部日志（供复制发送）；
  * - [clear] 清空。
  */
@@ -42,9 +43,11 @@ object AppLog {
     private fun record(level: String, tag: String, msg: String, err: Throwable?) {
         val ts = java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", java.util.Locale.US)
             .format(java.util.Date())
+        val sanitizedMsg = LogSanitizer.sanitizeGeneralText(msg)
+        val sanitizedErrMsg = err?.message?.let { LogSanitizer.sanitizeGeneralText(it) }
         val line = buildString {
-            append(ts).append(' ').append(level).append('/').append(tag).append(": ").append(msg)
-            err?.let { append("  !! ").append(it.javaClass.simpleName).append(": ").append(it.message) }
+            append(ts).append(' ').append(level).append('/').append(tag).append(": ").append(sanitizedMsg)
+            err?.let { append("  !! ").append(it.javaClass.simpleName).append(": ").append(sanitizedErrMsg) }
         }
         synchronized(lines) {
             if (lines.size >= CAP) lines.removeFirst()

@@ -386,4 +386,198 @@ class ImportOccurrencePlannerTest {
         assertTrue(result.toString(),result is ImportReviewResult.Blocked)
         assertTrue((result as ImportReviewResult.Blocked).problems.any { it.code=="ORIGINAL_TIME_INVALID_REQUIRES_CORRECTION" })
     }
+
+
+    @Test fun duplicateImageAppendWithIndependentIdentityReviewIsIdempotentAndUnchanged() {
+        val s = snapshot()
+        val p0 = ReviewLocator(courseIndex = 0, meetingIndex = 0)
+        val p1 = ReviewLocator(courseIndex = 1, meetingIndex = 0)
+        val courses1 = listOf(
+            RichCourseDraft("Hadoop实验", meetings = listOf(rich(base(setOf(1), setOf(1))))),
+            RichCourseDraft("编译原理", meetings = listOf(rich(base(setOf(2), setOf(3, 4)))))
+        )
+        val format1 = FormatParseResult(RichTimetableDraft(courses = courses1))
+        val candidates1 = courses1.mapIndexed { i, c ->
+            com.lingion.sleepy.importing.ocr.OcrCandidateCourse(
+                com.lingion.sleepy.importing.ocr.CandidateCourseId("candidate-$i"),
+                c, listOf("r$i"), emptyList(), com.lingion.sleepy.importing.formats.DraftPath(i)
+            )
+        }
+        val outer1 = com.lingion.sleepy.importing.ocr.OcrLayoutParseResult(
+            format1, com.lingion.sleepy.importing.ocr.OcrLayoutDocument(emptyList()),
+            candidateCourses = candidates1,
+            identityProposals = listOf(
+                com.lingion.sleepy.importing.ocr.ArchiveIdentityProposal(candidates1.map { it.id }, com.lingion.sleepy.importing.ocr.ArchiveIdentityEvidence.SAME_TITLE, emptyList())
+            )
+        )
+        val session1 = ImportReviewSession.create(FrozenImportSource.fromOcr(outer1), ImportReviewContext(ImportTarget("local", 1, 7, 3), termMonday = monday, targetPeriods = s.periods))
+        val decisions1 = ImportReviewDecisions(
+            evidence = session1.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session1.reviewEvidence(it.fingerprint) },
+            identity = session1.reviewIdentity(IdentityReviewKind.INDEPENDENT, listOf(IdentityArchive(setOf(p0)), IdentityArchive(setOf(p1))))
+        )
+        val reviewed1 = (RichDraftConverter.convert(session1, decisions1) as ImportReviewResult.Ready).reviewed
+        val plan1 = ImportOccurrencePlanner.plan(reviewed1, LoadedImportTarget(s, 3))
+        assertTrue("plan1 must be ready", plan1.ready)
+        assertEquals(2, plan1.courses.size)
+
+        var meetingIdSeq = 101L
+        val afterCourses = plan1.courses.mapIndexed { index, planned ->
+            val id = (index + 1).toLong()
+            val meetingsWithIds = planned.draft.meetings.map { it.copy(id = meetingIdSeq++) }
+            ScheduledCourse(id, planned.draft.courseName, planned.draft.teacher, planned.draft.room, planned.draft.color, meetingsWithIds)
+        }
+        val afterSnap = s.copy(courses = afterCourses, revision = 8)
+        val states = plan1.courses.mapIndexed { index, planned ->
+            val course = afterCourses[index]
+            val fragmentMap = planned.fragments.mapIndexed { fIndex, f -> f.key to course.meetings[fIndex].id }.toMap()
+            val courseIds = plan1.courses.mapIndexed { i, p -> p.key to afterCourses[i].id }.toMap()
+            course.id to ImportNormalizationCodec.hydrate(planned, course, afterSnap.scopeToken, afterSnap.settings.id, afterSnap, fragmentMap, emptyMap(), courseIds)
+        }.toMap()
+
+        val loadedTarget = LoadedImportTarget(afterSnap, 3, states)
+
+        // 第二次同图/相同安排 APPEND 导入
+        val session2 = ImportReviewSession.create(FrozenImportSource.fromOcr(outer1), ImportReviewContext(ImportTarget("local", 1, 8, 3), termMonday = monday, targetPeriods = afterSnap.periods))
+        val decisions2 = ImportReviewDecisions(
+            evidence = session2.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session2.reviewEvidence(it.fingerprint) },
+            identity = session2.reviewIdentity(IdentityReviewKind.INDEPENDENT, listOf(IdentityArchive(setOf(p0)), IdentityArchive(setOf(p1))))
+        )
+        val reviewed2 = (RichDraftConverter.convert(session2, decisions2) as ImportReviewResult.Ready).reviewed
+        val plan2 = ImportOccurrencePlanner.plan(reviewed2, loadedTarget)
+
+        assertTrue("plan2 must be ready: ${plan2.problems}", plan2.ready)
+        assertTrue("All arrangements already exist, plan2 must be unchanged: ${plan2.courses}", plan2.unchanged)
+        assertTrue("plan2 must have zero written courses", plan2.courses.isEmpty())
+    }
+
+    @Test fun reimportAfterUpdatingPeriodsAdaptsAndRemainsUnchanged() {
+        val s = snapshot()
+        val p0 = ReviewLocator(courseIndex = 0, meetingIndex = 0)
+        val courses1 = listOf(
+            RichCourseDraft("Hadoop实验", meetings = listOf(rich(base(setOf(1, 2), setOf(1, 2)))))
+        )
+        val format1 = FormatParseResult(RichTimetableDraft(courses = courses1))
+        val session1 = ImportReviewSession.create(FrozenImportSource.fromFormat(format1), ImportReviewContext(ImportTarget("local", 1, 7, 3), termMonday = monday, targetPeriods = s.periods))
+        val decisions1 = ImportReviewDecisions(
+            evidence = session1.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session1.reviewEvidence(it.fingerprint) }
+        )
+        val reviewed1 = (RichDraftConverter.convert(session1, decisions1) as ImportReviewResult.Ready).reviewed
+        val plan1 = ImportOccurrencePlanner.plan(reviewed1, LoadedImportTarget(s, 3))
+        assertTrue(plan1.ready)
+
+        val id = 1L
+        val course1 = ScheduledCourse(id, "Hadoop实验", "", "", 9, plan1.courses.single().draft.meetings.map { it.copy(id = 101L) })
+        val snap1 = s.copy(courses = listOf(course1), revision = 8)
+        val fragmentMap = plan1.courses.single().fragments.mapIndexed { fi, f -> f.key to course1.meetings[fi].id }.toMap()
+        val state1 = ImportNormalizationCodec.hydrate(plan1.courses.single(), course1, snap1.scopeToken, snap1.settings.id, snap1, fragmentMap, emptyMap(), mapOf(plan1.courses.single().key to id))
+
+        // 模拟修改作息时间（顺延 15 分钟）
+        val newPeriods = snap1.periods.map { Period(it.number, it.start.plusMinutes(15), it.end.plusMinutes(15)) }
+        val snapAfterPeriods = snap1.copy(periods = newPeriods, revision = 9)
+        val adaptedState = ImportNormalizationPeriodAdapter.adapt(state1, snap1.periods, newPeriods, course1, snapAfterPeriods)
+        val loadedTarget = LoadedImportTarget(snapAfterPeriods, 3, mapOf(id to adaptedState))
+
+        // 重新追加导入（使用新作息下的相同节次安排）
+        val session2 = ImportReviewSession.create(FrozenImportSource.fromFormat(format1), ImportReviewContext(ImportTarget("local", 1, 9, 3), termMonday = monday, targetPeriods = newPeriods))
+        val decisions2 = ImportReviewDecisions(
+            evidence = session2.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session2.reviewEvidence(it.fingerprint) }
+        )
+        val reviewed2 = (RichDraftConverter.convert(session2, decisions2) as ImportReviewResult.Ready).reviewed
+        val plan2 = ImportOccurrencePlanner.plan(reviewed2, loadedTarget)
+
+        assertTrue("plan2 must be ready: ${plan2.problems}", plan2.ready)
+        assertTrue("plan2 must be unchanged after periods update and reimport: ${plan2.courses}", plan2.unchanged)
+        assertTrue(plan2.courses.isEmpty())
+    }
+
+    @Test fun ambiguousCourseIdentityNeverSilentlyMergesAndPreservesIndependentCourses() {
+        val c1 = ScheduledCourse(1, "多重同名课", "教师A", "教室1", 9, listOf(base(setOf(1), setOf(1)).copy(id = 101, teacher = "教师A", room = "教室1")), sourceCourseCode = null, sourceClassCode = null)
+        val c2 = ScheduledCourse(2, "多重同名课", "教师B", "教室2", 9, listOf(base(setOf(2), setOf(1)).copy(id = 102, teacher = "教师B", room = "教室2")), sourceCourseCode = null, sourceClassCode = null)
+        val s = snapshot().copy(courses = listOf(c1, c2), revision = 10)
+
+        // 待导入的同名课没有提供代码区分，且已存库有2门同名课
+        val inputCourses = listOf(
+            RichCourseDraft("多重同名课", meetings = listOf(rich(base(setOf(3), setOf(1)).copy(teacher = "教师C", room = "教室3"))))
+        )
+        val session = ImportReviewSession.create(FrozenImportSource.fromFormat(FormatParseResult(RichTimetableDraft(courses = inputCourses))), ImportReviewContext(ImportTarget("local", 1, 10, 3), termMonday = monday, targetPeriods = s.periods))
+        val decisions = ImportReviewDecisions(
+            evidence = session.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session.reviewEvidence(it.fingerprint) }
+        )
+        val reviewed = (RichDraftConverter.convert(session, decisions) as ImportReviewResult.Ready).reviewed
+        val plan = ImportOccurrencePlanner.plan(reviewed, LoadedImportTarget(s, 3))
+
+        // 绝不能静默合并到 c1 或 c2，保留为独立课程
+        assertTrue("plan must be ready: ${plan.problems}", plan.ready)
+        assertFalse("plan has new course, so not unchanged", plan.unchanged)
+        assertTrue("neither c1 nor c2 should be modified", plan.courses.none { it.existingCourseId == 1L || it.existingCourseId == 2L })
+        val full = after(s, plan)
+        assertEquals(3, full.courses.size)
+        assertTrue(full.courses.any { it.id == 1L && it.teacher == "教师A" })
+        assertTrue(full.courses.any { it.id == 2L && it.teacher == "教师B" })
+    }
+
+    @Test fun mixedBatchOnlyAddsNewOccurrencesWhileExistingOccurrencesAreDeduplicated() {
+        val storedMeeting = base(setOf(1), setOf(1)).copy(id = 101, teacher = "教师", room = "教室")
+        val course1 = ScheduledCourse(1, "混合课", "教师", "教室", 9, listOf(storedMeeting))
+        val s = snapshot().copy(courses = listOf(course1), revision = 10)
+        val target = LoadedImportTarget(s, 3)
+
+        // 输入包含2条安排：安排1与已存完全相同（周1第1节），安排2是新周次（周2第1节）
+        val inputMeetings = listOf(
+            rich(base(setOf(1), setOf(1)).copy(teacher = "教师", room = "教室")),
+            rich(base(setOf(2), setOf(1)).copy(teacher = "教师", room = "教室"))
+        )
+        val inputCourses = listOf(RichCourseDraft("混合课", meetings = inputMeetings))
+        val session = ImportReviewSession.create(FrozenImportSource.fromFormat(FormatParseResult(RichTimetableDraft(courses = inputCourses))), ImportReviewContext(ImportTarget("local", 1, 10, 3), termMonday = monday, targetPeriods = s.periods))
+        val decisions = ImportReviewDecisions(
+            evidence = session.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session.reviewEvidence(it.fingerprint) }
+        )
+        val reviewed = (RichDraftConverter.convert(session, decisions) as ImportReviewResult.Ready).reviewed
+        val plan = ImportOccurrencePlanner.plan(reviewed, target)
+
+        assertTrue("plan must be ready: ${plan.problems}", plan.ready)
+        assertFalse("plan has new occurrence, so not unchanged", plan.unchanged)
+        assertEquals(1, plan.courses.size)
+        val planned = plan.courses.single()
+        // 已有安排被吸收去重，规划结果只包含新增安排
+        val plannedMeetings = planned.draft.meetings
+        val plannedWeeks = plannedMeetings.flatMap { it.weeks }.toSet()
+        assertEquals(setOf(2), plannedWeeks)
+
+        // 最终快照包含完整组合，既有周次1与新增周次2均存在且不重复
+        val full = after(s, plan)
+        val allWeeks = full.courses.flatMap { it.meetings }.flatMap { it.weeks }.toSet()
+        assertEquals(setOf(1, 2), allWeeks)
+    }
+
+    @Test fun differentDatesOrProjectsOrGroupsAreNeverSwallowed() {
+        val d1 = LocalDate.of(2026, 10, 24)
+        val d2 = LocalDate.of(2026, 10, 31)
+        val exp1 = CourseMeeting(id = 101, day = 0, weeks = emptySet(), sections = setOf(1, 2), kind = MeetingKind.DATE_SPECIFIC, dates = setOf(d1), experimentProject = "项目1", group = "组A", isExperiment = true)
+        val course = ScheduledCourse(1, "实验课", "", "", 9, listOf(exp1))
+        val s = snapshot().copy(courses = listOf(course), revision = 10)
+
+        // 输入不同日期的实验安排（2026-10-31）
+        val exp2Draft = RichMeetingDraft(
+            kind = com.lingion.sleepy.importing.MeetingKind.DATE_SPECIFIC,
+            dates = setOf(d2),
+            sections = setOf(1, 2),
+            experimentProject = "项目1",
+            group = "组A",
+            isExperiment = true
+        )
+        val inputCourses = listOf(RichCourseDraft("实验课", meetings = listOf(exp2Draft)))
+        val session = ImportReviewSession.create(FrozenImportSource.fromFormat(FormatParseResult(RichTimetableDraft(courses = inputCourses))), ImportReviewContext(ImportTarget("local", 1, 10, 3), termMonday = monday, targetPeriods = s.periods))
+        val decisions = ImportReviewDecisions(
+            evidence = session.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session.reviewEvidence(it.fingerprint) }
+        )
+        val reviewed = (RichDraftConverter.convert(session, decisions) as ImportReviewResult.Ready).reviewed
+        val plan = ImportOccurrencePlanner.plan(reviewed, LoadedImportTarget(s, 3))
+
+        assertTrue(plan.ready)
+        assertFalse(plan.unchanged)
+        val full = after(s, plan)
+        val allDates = full.courses.flatMap { it.meetings }.flatMap { it.dates }.toSet()
+        assertTrue("Must contain both d1 and d2 without swallowing", allDates.contains(d1) && allDates.contains(d2))
+    }
 }

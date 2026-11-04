@@ -2,7 +2,17 @@ package com.aggapp.core.model
 
 /** 平台枚举（README §4.3 逐字对齐） */
 enum class Platform(val label: String) {
-    PDD("拼多多"), TAOBAO("淘宝"), JD("京东"), SF("顺丰"), RYLL("如意邻里")
+    PDD("拼多多"),
+    TAOBAO("淘宝"),
+    JD("京东"),
+    SF("顺丰"),
+    @Deprecated("如意邻里已从活动平台中移除，保留仅用于兼容旧存储反序列化", level = DeprecationLevel.WARNING)
+    RYLL("如意邻里");
+
+    companion object {
+        /** 当前活动平台列表（拼多多、淘宝、京东、顺丰） */
+        val activePlatforms: List<Platform> = listOf(PDD, TAOBAO, JD, SF)
+    }
 }
 
 /** 平台登录凭据（落盘前由 CredentialStore 加密） */

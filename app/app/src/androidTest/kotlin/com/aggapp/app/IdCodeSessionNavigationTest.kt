@@ -225,20 +225,20 @@ class IdCodeSessionNavigationTest {
         waitForStateCondition(vm) { !it.loading }
 
         // 1. 先正常登录并拉到有效码
-        val cred = Credential(Platform.RYLL, "ryll_valid", emptyMap(), System.currentTimeMillis())
+        val cred = Credential(Platform.JD, "jd_relogin_test", emptyMap(), System.currentTimeMillis())
         session.upsert(cred)
-        waitForStateCondition(vm) { !it.loading && it.codes[Platform.RYLL] != null && it.isReal[Platform.RYLL] == true }
+        waitForStateCondition(vm) { !it.loading && it.codes[Platform.JD] != null && it.isReal[Platform.JD] == true }
 
         // 2. 模拟凭据过期，后续拉取抛出 NeedRelogin
         delay(200)
-        fakeAdapters[Platform.RYLL]?.shouldFailWithRelogin = true
+        fakeAdapters[Platform.JD]?.shouldFailWithRelogin = true
         vm.refreshAll(force = true)
 
         // 3. 验证 NeedRelogin 后码被清空且 isReal 变为 false
-        waitForStateCondition(vm) { !it.loading && it.codes[Platform.RYLL] == null && it.isReal[Platform.RYLL] == false }
+        waitForStateCondition(vm) { !it.loading && it.codes[Platform.JD] == null && it.isReal[Platform.JD] == false }
         val state = vm.state.value
-        assertNull("凭据失效（NeedRelogin）时不展示码", state.codes[Platform.RYLL])
-        assertEquals("凭据失效标记 isReal 为 false", false, state.isReal[Platform.RYLL])
+        assertNull("凭据失效（NeedRelogin）时不展示码", state.codes[Platform.JD])
+        assertEquals("凭据失效标记 isReal 为 false", false, state.isReal[Platform.JD])
     }
 
     /**

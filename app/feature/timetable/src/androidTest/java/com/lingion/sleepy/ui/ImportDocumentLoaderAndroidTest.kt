@@ -170,6 +170,33 @@ class ImportDocumentLoaderAndroidTest {
         assertTrue((loadedPdf as LoadedImportDocument.Parsed).source.format.draft?.courses.orEmpty().isNotEmpty())
     }
 
+    @Test(timeout = 60_000) fun deterministicSourceIdKeepsContentIdentityAcrossDifferentNamesAndDistinguishesDifferentContent() = runBlocking {
+        val loader = AndroidImportDocumentLoader(context)
+        val jsonA = """{"schemaVersion":1,"courses":[{"key":"c1","name":"DocCourse","meetings":[{"key":"m1","kind":"RECURRING","dayOfWeek":1,"weeks":[1],"sections":[1]}]}]}""".toByteArray()
+        val jsonB = jsonA.clone()
+        val jsonC = """{"schemaVersion":1,"courses":[{"key":"c2","name":"DocCourse2","meetings":[{"key":"m2","kind":"RECURRING","dayOfWeek":2,"weeks":[2],"sections":[2]}]}]}""".toByteArray()
+
+        val fileA = stage("doc-a.json", jsonA)
+        val fileB = stage("doc-b.json", jsonB)
+        val fileC = stage("doc-c.json", jsonC)
+
+        val loadedA = loader.load(Uri.fromFile(fileA), ImportDocumentKind.JSON, 20, LocalDate.of(2026, 9, 7), LocalDate.of(2026, 10, 28))
+        val loadedB = loader.load(Uri.fromFile(fileB), ImportDocumentKind.JSON, 20, LocalDate.of(2026, 9, 7), LocalDate.of(2026, 10, 28))
+        val loadedC = loader.load(Uri.fromFile(fileC), ImportDocumentKind.JSON, 20, LocalDate.of(2026, 9, 7), LocalDate.of(2026, 10, 28))
+
+        assertTrue(loadedA is LoadedImportDocument.Parsed)
+        assertTrue(loadedB is LoadedImportDocument.Parsed)
+        assertTrue(loadedC is LoadedImportDocument.Parsed)
+
+        val sourceIdA = (loadedA as LoadedImportDocument.Parsed).source.format.sources.first().sourceId
+        val sourceIdB = (loadedB as LoadedImportDocument.Parsed).source.format.sources.first().sourceId
+        val sourceIdC = (loadedC as LoadedImportDocument.Parsed).source.format.sources.first().sourceId
+
+        assertTrue("sourceId must start with doc:", sourceIdA.startsWith("doc:"))
+        assertEquals("Same content across different names must produce identical sourceId", sourceIdA, sourceIdB)
+        org.junit.Assert.assertNotEquals("Different content must produce different sourceId", sourceIdA, sourceIdC)
+    }
+
     private fun bmpHeader(): ByteArray = ByteArray(54).also { bytes ->
         bytes[0] = 'B'.code.toByte(); bytes[1] = 'M'.code.toByte()
         bytes[2] = 54; bytes[10] = 54; bytes[14] = 40

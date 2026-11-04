@@ -61,44 +61,5 @@ object AppModule {
     fun providePddAntiContent(@ApplicationContext context: Context): com.aggapp.platform.pdd.PddAntiContent =
         com.aggapp.platform.pdd.PddAntiContent(context)
 
-    /**
-     * 如意邻里静态 PIN 解码器：getPinCode 返回 Code128 条码 PNG（data:image base64），
-     * :app（Android 模块）用 zxing 本地解码出 16 位 PIN（docs/platform/ryll/README.md §4.2）。
-     */
-    @Provides
-    @Singleton
-    fun provideRyllPinDecoder(): com.aggapp.platform.ryll.PinDecoder =
-        com.aggapp.platform.ryll.PinDecoder { dataUrl ->
-            runCatching {
-                val b64 = dataUrl.substringAfter("base64,", "")
-                if (b64.isEmpty()) return@runCatching null
-                val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
-                val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    ?: return@runCatching null
-                val w = bmp.width
-                val h = bmp.height
-                val pixels = IntArray(w * h)
-                bmp.getPixels(pixels, 0, w, 0, 0, w, h)
-                bmp.recycle()
-                val source = com.google.zxing.RGBLuminanceSource(w, h, pixels)
-                val reader = com.google.zxing.MultiFormatReader()
-                val hints = mapOf(
-                    com.google.zxing.DecodeHintType.TRY_HARDER to true,
-                    com.google.zxing.DecodeHintType.POSSIBLE_FORMATS to listOf(
-                        com.google.zxing.BarcodeFormat.CODE_128,
-                    ),
-                )
-                try {
-                    reader.decode(com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(source)), hints).text
-                } catch (_: Exception) {
-                    reader.reset()
-                    reader.decode(
-                        com.google.zxing.BinaryBitmap(
-                            com.google.zxing.common.GlobalHistogramBinarizer(source),
-                        ),
-                        hints,
-                    ).text // 换 binarizer 兜底
-                }
-            }.getOrNull()
-        }
+
 }

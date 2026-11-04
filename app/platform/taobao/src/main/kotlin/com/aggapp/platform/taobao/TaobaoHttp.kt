@@ -110,6 +110,9 @@ internal class TaobaoCookieStore(initial: Map<String, String> = emptyMap()) {
 
     private val map = LinkedHashMap<String, String>(initial)
 
+    /** 导出全部已存 Cookie 键名列表（供安全脱敏日志使用） */
+    fun keys(): Set<String> = map.keys
+
     /** 解析 Set-Cookie 头列表（OkHttp response.headers("Set-Cookie") 产物） */
     fun store(setCookieHeaders: List<String>) {
         for (line in setCookieHeaders) {

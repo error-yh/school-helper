@@ -56,13 +56,13 @@ internal class TaobaoLoginClient(private val http: OkHttpClient) {
     var smsToken: String = ""
         private set
 
-    /** 调试导出：登录链路会话中间态全貌（_csrf / smsToken / 会话 Cookie） */
+    /** 调试导出：登录链路会话中间态全貌（安全脱敏摘要） */
     fun debugDump(): String = buildString {
-        appendLine("csrf=$csrf")
-        appendLine("smsToken=$smsToken")
-        appendLine("cookies=${cookies.header()}")
+        appendLine("csrf=${if (csrf.isNotBlank()) "[PRESENT]" else "[NONE]"}")
+        appendLine("smsToken=${if (smsToken.isNotBlank()) "[MASKED, len=${smsToken.length}]" else "[NONE]"}")
+        appendLine("cookie_keys=${cookies.keys().joinToString()}")
         if (pendingAccounts.isNotEmpty()) {
-            appendLine("pendingAccounts=${pendingAccounts.map { "${it.nick}(${it.uniqId})" }}")
+            appendLine("pendingAccounts_count=${pendingAccounts.size}")
         }
     }
 
@@ -300,12 +300,12 @@ internal class TaobaoLoginClient(private val http: OkHttpClient) {
                     return@repeat
                 }
             }
-            AppLog.d("TB", "selectAccount done: uniqId=$uniqId HTTP=$lastCode cookies=${cookies.header()}")
+            AppLog.d("TB", "selectAccount done: uniqId=$uniqId HTTP=$lastCode cookie_keys=${cookies.keys().joinToString()}")
             // 收尾成功判定：cookie2 与 unb 必须同时落地
             if (cookies["cookie2"].isNullOrBlank() || cookies["unb"].isNullOrBlank()) {
                 throw PlatformError.ParseFailed(
                     Platform.TAOBAO,
-                    "选账号收尾后 Cookie 仍缺 cookie2/unb | HTTP=$lastCode uniqId=$uniqId cookies=${cookies.header()} body=${lastBody.take(300)}",
+                    "选账号收尾后 Cookie 仍缺 cookie2/unb | HTTP=$lastCode uniqId=$uniqId cookie_keys=${cookies.keys().joinToString()}",
                 )
             }
             pendingAccounts = emptyList()

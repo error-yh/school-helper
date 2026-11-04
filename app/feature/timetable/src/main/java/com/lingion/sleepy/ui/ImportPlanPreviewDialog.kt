@@ -74,7 +74,7 @@ internal fun ImportPlanPreviewDialog(state:ImportFlowState,model:ImportFlowViewM
                     Text("${if(conflict.other.courseId!=null) "已有" else "本次另一条"}：${conflictSideSummary(conflict.other)}")
                 }
             }
-            if(preview.unchanged) Text(if((preview.changes?.skippedSourceMeetings ?: 0)>0) "已跳过所选冲突，本次不写入课程。" else "所选内容已存在，确认后不会重复写入。")
+            if(preview.unchanged) Text(if((preview.changes?.skippedSourceMeetings ?: 0)>0) "已跳过所选冲突，本次不写入课程。" else "这些课程安排已存在，无需重复导入。")
             if(state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         }},
         confirmButton={TextButton(onClick=model::confirm,enabled=!state.busy && preview.ready) { Text("继续确认") }},

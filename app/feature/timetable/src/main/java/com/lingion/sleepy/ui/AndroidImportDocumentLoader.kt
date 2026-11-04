@@ -273,22 +273,24 @@ internal class AndroidImportDocumentLoader(context: Context) {
                     val binary = setOf(ImportDocumentKind.PDF, ImportDocumentKind.IMAGE, ImportDocumentKind.XLSX)
                     selected = if (kind == ImportDocumentKind.AUTO || detected in binary) detected else if (detected != null) kind else null
                     check()
+                    val fileDigest = runCatching { sha256(copy) }.getOrNull()
+                    val fileContext = if (fileDigest != null) context.copy(sourceId = "doc:" + fileDigest.take(32)) else context
                     val result = when (selected) {
-                        ImportDocumentKind.PDF -> if (detectedProbe.format == ImportContentFormat.PDF) pdf(copy, context, termMonday, referenceDate)
+                        ImportDocumentKind.PDF -> if (detectedProbe.format == ImportContentFormat.PDF) pdf(copy, fileContext, termMonday, referenceDate)
                             else reject(ImportReadMessages.mismatch(detectedProbe, ImportDocumentKind.PDF), ImportReadFacts.STAGE_SNIFF, copy, prefix)
-                        ImportDocumentKind.IMAGE -> if (detectedProbe.supportedImage) image(copy, context, termMonday, referenceDate)
+                        ImportDocumentKind.IMAGE -> if (detectedProbe.supportedImage) image(copy, fileContext, termMonday, referenceDate)
                             else reject(ImportReadMessages.mismatch(detectedProbe, ImportDocumentKind.IMAGE), ImportReadFacts.STAGE_SNIFF, copy, prefix)
                         ImportDocumentKind.XLSX -> if (detectedProbe.format == ImportContentFormat.ZIP) copy.openRead().use { source ->
-                            val result = XlsxWorkbookReader().read(source, context)
-                            result.workbook?.let { LoadedImportDocument.Tables(it.sheets, result.issues, context.copy(cancellation = ImportCancellation {})) }
+                            val result = XlsxWorkbookReader().read(source, fileContext)
+                            result.workbook?.let { LoadedImportDocument.Tables(it.sheets, result.issues, fileContext.copy(cancellation = ImportCancellation {})) }
                                 ?: rejectFormat(result.issues)
                         } else reject(ImportReadMessages.mismatch(detectedProbe, ImportDocumentKind.XLSX), ImportReadFacts.STAGE_SNIFF, copy, prefix)
                         ImportDocumentKind.CSV -> copy.openRead().use { source ->
-                            val result = Utf8CsvReader().read(source, context)
-                            result.table?.let { LoadedImportDocument.Tables(listOf(WorksheetData(1, "CSV 表格", "csv", SheetVisibility.VISIBLE, SheetKind.WORKSHEET, it)), result.issues, context.copy(cancellation = ImportCancellation {})) }
+                            val result = Utf8CsvReader().read(source, fileContext)
+                            result.table?.let { LoadedImportDocument.Tables(listOf(WorksheetData(1, "CSV 表格", "csv", SheetVisibility.VISIBLE, SheetKind.WORKSHEET, it)), result.issues, fileContext.copy(cancellation = ImportCancellation {})) }
                                 ?: rejectFormat(result.issues)
                         }
-                        ImportDocumentKind.JSON -> copy.openRead().use { source -> format(VersionedJsonTimetableParser().parse(source, context)) }
+                        ImportDocumentKind.JSON -> copy.openRead().use { source -> format(VersionedJsonTimetableParser().parse(source, fileContext)) }
                         ImportDocumentKind.TEXT -> reject(ImportReadMessages.TEXT_NOTICE_REJECTED, ImportReadFacts.STAGE_SNIFF, copy, prefix)
                         else -> reject(ImportReadMessages.content(detectedProbe), ImportReadFacts.STAGE_SNIFF, copy, prefix)
                     }
@@ -301,7 +303,7 @@ internal class AndroidImportDocumentLoader(context: Context) {
                             else -> ImportReadFacts.STAGE_TEXT
                         }
                         diagnose(if (result is LoadedImportDocument.Parsed || result is LoadedImportDocument.Tables) ImportReadFacts.STAGE_OK else stage,
-                            copy.byteCount, runCatching { sha256(copy) }.getOrNull(), magicHex(prefix))
+                            copy.byteCount, fileDigest, magicHex(prefix))
                     }
                     result.withDocumentName(displayName).also { check() }
                 }

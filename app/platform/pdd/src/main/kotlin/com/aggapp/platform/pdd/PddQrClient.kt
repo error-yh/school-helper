@@ -99,7 +99,7 @@ class PddQrClient @Inject constructor(
         val secretKey = env.optString("secret_key")
         val qrContent = env.optString("data")
         if (secretKey.isBlank() || qrContent.isBlank()) fail("query_qr_code 缺 secret_key/data：$env")
-        AppLog.d(TAG, "genQr ok secret_key=$secretKey qr=${qrContent.take(80)}")
+        AppLog.d(TAG, "genQr ok secret_key=[MASKED] qr=${qrContent.take(30)}...")
         return QrInfo(secretKey, qrContent)
     }
 
@@ -114,7 +114,7 @@ class PddQrClient @Inject constructor(
         val env = parseJson(resp) ?: return CheckResult.Waiting
         return when {
             env.optString("ticket").isNotBlank() -> {
-                AppLog.d(TAG, "checkQr 拿到 ticket=${env.optString("ticket").take(24)}...")
+                AppLog.d(TAG, "checkQr 拿到 ticket=[MASKED]")
                 CheckResult.Ticket(env.optString("ticket"))
             }
             env.optString("error_code") == "60020" -> {
@@ -146,7 +146,7 @@ class PddQrClient @Inject constructor(
         status?.let { body.put("status", it) }
         val resp = post("api/sigerus/auth/ticket", body, ac)
         val env = parseJson(resp)
-        AppLog.d(TAG, "authTicket(vat=${vat != null},status=$status) http=${resp.body.take(300)} cookies=${parseCookieMap(resp.setCookies).keys}")
+        AppLog.d(TAG, "authTicket(vat=${vat != null},status=$status) http_code=${resp.httpCode} cookies=${parseCookieMap(resp.setCookies).keys}")
         // 成功判定：Set-Cookie 出现 PDDAccessToken（与 WebView detectLoginSuccess 同源）
         val cookies = parseCookieMap(resp.setCookies)
         val token = cookies["PDDAccessToken"]
@@ -188,7 +188,7 @@ class PddQrClient @Inject constructor(
         val resp = post("api/phantom/vc_pre_ck", body, ac)
         val outer = parseJson(resp) ?: fail("vc_pre_ck 响应非 JSON：${resp.body.take(120)}")
         val data = decryptResponse(outer, key, iv) ?: fail("vc_pre_ck 解密失败：$outer")
-        AppLog.d(TAG, "vcPreCk resp=${data.toString().take(200)}")
+        AppLog.d(TAG, "vcPreCk ok")
         return PreCk(
             serverTime = data.optLong("server_time").takeIf { it > 0 },
             salt = data.optString("salt"),
@@ -215,7 +215,7 @@ class PddQrClient @Inject constructor(
             AppLog.w(TAG, "obtainCaptcha 非零 code=${data}")
             return -1
         }
-        AppLog.d(TAG, "obtainCaptcha type=${data.optInt("type", -1)} raw=${data.toString().take(200)}")
+        AppLog.d(TAG, "obtainCaptcha type=${data.optInt("type", -1)}")
         return data.optInt("type", -1)
     }
 
@@ -232,7 +232,7 @@ class PddQrClient @Inject constructor(
         val resp = post("api/phantom/user_verify", encryptBody(params, vat, key, iv), ac)
         val outer = parseJson(resp) ?: return false
         val data = decryptResponse(outer, key, iv) ?: return false
-        AppLog.d(TAG, "userVerify resp=${data.toString().take(200)}")
+        AppLog.d(TAG, "userVerify code=${data.optInt("code", -1)}")
         return data.optInt("code", -1) == 0
     }
 
@@ -253,7 +253,7 @@ class PddQrClient @Inject constructor(
         val resp = post("api/phantom/challenge_captcha", encryptBody(params, vat, key, iv), ac)
         val data = parseJson(resp)?.let { decryptResponse(it, key, iv) } ?: parseJson(resp)
         if (data == null || data.optInt("code", -1) != 0) {
-            AppLog.w(TAG, "challengeCaptcha 失败 raw=${resp.body.take(200)}")
+            AppLog.w(TAG, "challengeCaptcha 失败 code=${resp.httpCode}")
             return null
         }
         val opts = data.optJSONObject("options") ?: return null
@@ -302,7 +302,7 @@ class PddQrClient @Inject constructor(
 
     // ---------- HTTP ----------
 
-    private class Resp(val setCookies: List<String>, val body: String)
+    private class Resp(val httpCode: Int, val setCookies: List<String>, val body: String)
 
     private suspend fun post(api: String, body: JSONObject, ac: String): Resp {
         val request = Request.Builder()
@@ -314,7 +314,7 @@ class PddQrClient @Inject constructor(
         return try {
             withContext(Dispatchers.IO) {
                 http.newCall(request).execute().use { resp ->
-                    Resp(resp.headers("Set-Cookie"), resp.body?.string().orEmpty())
+                    Resp(resp.code, resp.headers("Set-Cookie"), resp.body?.string().orEmpty())
                 }
             }
         } catch (e: IOException) {

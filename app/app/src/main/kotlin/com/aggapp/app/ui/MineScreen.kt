@@ -125,7 +125,7 @@ fun MineScreen(
 
             // ===== 顶部：5 平台登录态总览（点击展开对应登录表单）=====
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Platform.entries.forEach { p ->
+                Platform.activePlatforms.forEach { p ->
                     val ls = state.loginStates[p]
                     val selected = expanded == p
                     val accent = com.aggapp.app.ui.theme.Brand.PlatformColor[p]
@@ -421,81 +421,8 @@ fun MineScreen(
                     }
                 }
 
-                Platform.RYLL -> {
-                    var ryllCaptcha by remember { mutableStateOf("") }
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("如意邻里（圆通）· 短信验证码登录", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "发短信需先输图形验证码；身份码为静态码，登录一次后永久本地生成",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = phone,
-                                onValueChange = { phone = it },
-                                label = { Text("手机号") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            // 图形验证码：点图换一张（发短信前置，README §3.2）
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                state.ryllVcodeBase64?.let { dataUrl ->
-                                    val bmp = remember(dataUrl) { decodeDataUrlBitmap(dataUrl) }
-                                    if (bmp != null) {
-                                        Image(
-                                            bitmap = bmp.asImageBitmap(),
-                                            contentDescription = "图形验证码",
-                                            modifier = Modifier
-                                                .width(132.dp)
-                                                .height(44.dp)
-                                                .androidClickable { vm.ryllFetchVcode() },
-                                        )
-                                    } else {
-                                        Text("图形码解码失败", style = MaterialTheme.typography.bodySmall)
-                                    }
-                                } ?: run {
-                                    OutlinedButton(
-                                        onClick = { vm.ryllFetchVcode() },
-                                        enabled = !state.busy,
-                                    ) { Text("获取图形码") }
-                                }
-                                Spacer(Modifier.width(8.dp))
-                                OutlinedTextField(
-                                    value = ryllCaptcha,
-                                    onValueChange = { ryllCaptcha = it },
-                                    label = { Text("图形验证码") },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true,
-                                )
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Button(
-                                onClick = { vm.ryllSendSms(phone, ryllCaptcha) },
-                                enabled = !state.busy && phone.length == 11 && ryllCaptcha.isNotBlank(),
-                                modifier = Modifier.fillMaxWidth(),
-                            ) { Text("发送短信验证码") }
-                            if (state.ryllSmsSent) {
-                                Spacer(Modifier.height(8.dp))
-                                OutlinedTextField(
-                                    value = smsCode,
-                                    onValueChange = { smsCode = it },
-                                    label = { Text("短信验证码") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Button(
-                                    onClick = { vm.ryllLogin(smsCode) },
-                                    enabled = !state.busy && smsCode.isNotBlank(),
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) { Text("登录") }
-                            }
-                            LogoutRow(state.loginStates[Platform.RYLL]) { vm.logout(Platform.RYLL) }
-                        }
-                    }
+                null, Platform.RYLL -> {
+                    // 未选中或非活动平台不展开登录表单
                 }
             }
 

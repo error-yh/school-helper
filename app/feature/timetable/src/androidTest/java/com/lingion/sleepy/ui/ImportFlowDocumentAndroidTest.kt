@@ -27,10 +27,10 @@ class ImportFlowDocumentAndroidTest {
     private val json = """{"schemaVersion":1,"courses":[{"key":"c","name":"Synthetic","meetings":[{"key":"m","kind":"RECURRING","dayOfWeek":1,"weeks":[1],"sections":[1]}]}]}"""
 
     private fun sample(): File {
-        val root = InstrumentationRegistry.getArguments().getString("sampleRoot") ?: error("Missing private sample root")
-        val file = File(root, "pre5fix01-image.bin")
-        require(file.isFile) { "Staged private sample missing" }
-        return file
+        val root = InstrumentationRegistry.getArguments().getString("sampleRoot")
+        val file = root?.let { File(it, "pre5fix01-image.bin") }
+        org.junit.Assume.assumeTrue("Staged private sample missing in sampleRoot=$root", file != null && file.isFile)
+        return file!!
     }
 
     private fun synthetic(name: String, bytes: ByteArray): File =
@@ -106,15 +106,59 @@ class ImportFlowDocumentAndroidTest {
         assertEquals(0, repository.writes)
     }
 
-    private class FakeImportRepository : ImportRepository {
+    @Test(timeout = 900_000) fun realOcrImageThroughViewModelUsesIndependentIdentityAndConfirmDifferentSourceResolvesPreview() = runBlocking {
+        val repository = FakeImportRepository(withSourceRelation = true)
+        val model = ImportFlowViewModel(repository)
+        val loader = AndroidImportDocumentLoader(context)
+        model.loadDocument(loader, Uri.fromFile(sample()), ImportDocumentKind.IMAGE)
+        idle(model)
+        val session = checkNotNull(model.state.value.session)
+        assertTrue("OCR without explicit codes must require IDENTITY",
+            session.requirements.any { it.kind == ReviewRequirementKind.IDENTITY })
+
+        // 调用公开方法确认身份草案
+        model.confirmIdentityDraft()
+        val identity = checkNotNull(model.state.value.identityReview)
+        assertEquals(IdentityReviewKind.INDEPENDENT, identity.kind)
+
+        // 调用公开方法 check() 执行规划
+        model.check()
+        idle(model)
+        val preview = checkNotNull(model.state.value.preview)
+        assertTrue("来源关系需要核对时 sourceRelationRequired 为 true", preview.sourceRelationRequired)
+        assertFalse(preview.ready)
+
+        // 通过公开方法调用回答来源关系为 DIFFERENT_SOURCE
+        model.confirmDifferentSource()
+        idle(model)
+
+        val finalPreview = checkNotNull(model.state.value.preview)
+        assertTrue("确认不同来源后 preview 顺畅就绪", finalPreview.ready)
+        assertFalse(finalPreview.sourceRelationRequired)
+        assertEquals(SourceRelationChoice.DIFFERENT_SOURCE, repository.requestedSourceRelation)
+        assertEquals(0, repository.writes)
+    }
+
+    private class FakeImportRepository(private val withSourceRelation: Boolean = false) : ImportRepository {
         var writes = 0
+        var requestedSourceRelation: SourceRelationChoice? = null
         private val periods = listOf(Period(1, LocalTime.of(8, 0), LocalTime.of(8, 45)), Period(2, LocalTime.of(8, 55), LocalTime.of(9, 40)))
         private val snapshot = TimetableSnapshot(settings = SemesterSettings(startDate = LocalDate.parse("2026-09-07")), periods = periods, scopeToken = "local")
         private val target = ImportTarget("local", 1, 0, 4)
         override suspend fun readImportTarget(semesterId: Long) = ImportTargetView(target, snapshot, emptyList())
         override suspend fun previewImport(reviewed: ReviewedImport, conflicts: List<ConflictReviewDecision>): ImportPreviewResult {
             val range = TimeRange(LocalTime.of(8, 0), LocalTime.of(8, 45))
-            return ImportPreviewResult(ImportPlanPreview(target, reviewed.reviewDigest, "digest", reviewed.semanticFingerprint, reviewed.counts, emptySet()), emptyList(), emptyList(), false)
+            requestedSourceRelation = reviewed.decisions.sourceRelation?.choice
+            val sourceRelationRequired = withSourceRelation && reviewed.decisions.sourceRelation == null
+            val problems = if (sourceRelationRequired) listOf(ImportProblemView("ARCHIVE_MEMBERSHIP_REVIEW_REQUIRED", null)) else emptyList()
+            return ImportPreviewResult(
+                ImportPlanPreview(target, reviewed.reviewDigest, "digest", reviewed.semanticFingerprint, reviewed.counts, emptySet()),
+                emptyList(),
+                problems,
+                unchanged = false,
+                changes = null,
+                sourceRelationRequired = sourceRelationRequired
+            )
         }
         override suspend fun applyImport(command: ImportApplyCommand): ImportApplyResult { writes++; return ImportApplyResult.Applied(true, 1) }
     }

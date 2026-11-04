@@ -23,6 +23,5 @@ object Brand {
         com.aggapp.core.model.Platform.TAOBAO to Color(0xFFFF6A00),
         com.aggapp.core.model.Platform.JD to Color(0xFFE1251B),
         com.aggapp.core.model.Platform.SF to Color(0xFF00396F),
-        com.aggapp.core.model.Platform.RYLL to Color(0xFF00A0E9),
     )
 }

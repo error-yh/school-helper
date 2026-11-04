@@ -42,8 +42,6 @@ data class MineUiState(
     val pddQuizOrder: Int = 1,            // challenge_verify 的 question_order_number，提交后 +1
     val pddQuizMsg: String? = null,       // 答题反馈（答错提示等）
     // ---- 如意邻里短信验证码登录（图形码 + 短信码，README §3.2）----
-    val ryllVcodeBase64: String? = null,  // 图形验证码 PNG（base64 data URL，Compose 直接解码显示）
-    val ryllSmsSent: Boolean = false,     // 短信验证码已发送（可输入验证码登录）
     // ---- 淘宝多账号选择（手机号绑定多个淘宝账号时，原生弹窗选择后收尾登录）----
     val tbAccounts: List<com.aggapp.platform.taobao.TbAccountOption> = emptyList(),
     // ---- 淘宝 iv 风控页（多账号收尾命中风控时，WebView 弹窗内手动过风控）----
@@ -86,7 +84,7 @@ class MineViewModel @Inject constructor(
     fun refreshLoginStates() {
         viewModelScope.launch {
             val creds = session.credentials.value
-            val states = Platform.entries.associateWith { p ->
+            val states = Platform.activePlatforms.associateWith { p ->
                 val cred = creds[p]
                 if (cred == null) {
                     PlatformLoginState(p, loggedIn = false)
@@ -738,74 +736,6 @@ class MineViewModel @Inject constructor(
         }
     }
 
-    // ---------- 如意邻里：图形码 + 短信验证码登录（README §3.2，三步全在 RyllAdapter）----------
-
-    /** 步骤①：取图形验证码（randValue 存 adapter 单例内，UI 显示图片并让用户输 4 位图形码） */
-    fun ryllFetchVcode() {
-        viewModelScope.launch {
-            _state.value = _state.value.copy(busy = true, message = null)
-            try {
-                val adapter = adapters.getValue(Platform.RYLL) as com.aggapp.platform.ryll.RyllAdapter
-                val v = adapter.fetchVcode()
-                _state.value = _state.value.copy(busy = false, ryllVcodeBase64 = v.base64Png)
-            } catch (e: Exception) {
-                AppLog.e("AggApp", "ryll vcode failed", e)
-                _state.value = _state.value.copy(busy = false, message = "获取图形码失败：${e.message}")
-            }
-        }
-    }
-
-    /** 步骤②：图形码 + 手机号发短信；图形码错误时自动刷新图形码让用户重试 */
-    fun ryllSendSms(phone: String, captchaCode: String) {
-        if (phone.length != 11) {
-            _state.value = _state.value.copy(message = "请输入 11 位手机号")
-            return
-        }
-        if (captchaCode.isBlank()) {
-            _state.value = _state.value.copy(message = "请输入图形验证码")
-            return
-        }
-        viewModelScope.launch {
-            _state.value = _state.value.copy(busy = true, message = null)
-            try {
-                val adapter = adapters.getValue(Platform.RYLL) as com.aggapp.platform.ryll.RyllAdapter
-                adapter.sendSms(phone, captchaCode)
-                _state.value = _state.value.copy(busy = false, ryllSmsSent = true, message = "验证码已发送")
-            } catch (e: Exception) {
-                AppLog.e("AggApp", "ryll sendSms failed", e)
-                // 图形码错误 → 自动换一张，清空已输图形码
-                _state.value = _state.value.copy(busy = false, message = "发送失败：${e.message}（已刷新图形码）")
-                ryllFetchVcode()
-            }
-        }
-    }
-
-    /** 步骤③：短信码登录；成功后凭据含静态 PIN（永久本地出码） */
-    fun ryllLogin(smsCode: String) {
-        if (smsCode.isBlank()) {
-            _state.value = _state.value.copy(message = "请输入短信验证码")
-            return
-        }
-        viewModelScope.launch {
-            _state.value = _state.value.copy(busy = true, message = null)
-            try {
-                val adapter = adapters.getValue(Platform.RYLL) as com.aggapp.platform.ryll.RyllAdapter
-                val cred = adapter.loginWithSms(smsCode)
-                session.upsert(cred)
-                _state.value = _state.value.copy(
-                    busy = false,
-                    ryllSmsSent = false,
-                    message = if (cred.extra.containsKey("pin")) "如意邻里登录成功（静态码已本地缓存）"
-                    else "如意邻里登录成功",
-                )
-                refreshLoginStates()
-            } catch (e: Exception) {
-                AppLog.e("AggApp", "ryll login failed", e)
-                _state.value = _state.value.copy(busy = false, message = "登录失败：${e.message}")
-            }
-        }
-    }
-
     fun logout(platform: Platform) {
         session.clear(platform)
         refreshLoginStates()
@@ -861,9 +791,9 @@ class MineViewModel @Inject constructor(
         appendLine("NetDebug.enabled=${com.aggapp.platform.api.NetDebug.enabled}")
 
         appendLine()
-        appendLine("===== 1. 各平台登录态（含完整 token/Cookie） =====")
+        appendLine("===== 1. 各平台登录态（脱敏摘要） =====")
         val creds = session.credentials.value
-        for (p in Platform.entries) {
+        for (p in Platform.activePlatforms) {
             val cred = creds[p]
             appendLine("--- [${p.label}] ---")
             if (cred == null) {
@@ -871,10 +801,10 @@ class MineViewModel @Inject constructor(
                 continue
             }
             appendLine("capturedAt: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date(cred.capturedAt))}")
-            appendLine("token: ${cred.token}")
+            appendLine("token: ${com.aggapp.platform.api.LogSanitizer.maskToken(cred.token)}")
             if (cred.extra.isNotEmpty()) {
                 appendLine("extra:")
-                cred.extra.forEach { (k, v) -> appendLine("  $k = $v") }
+                com.aggapp.platform.api.LogSanitizer.maskExtra(cred.extra).forEach { (k, v) -> appendLine("  $k = $v") }
             }
         }
 
@@ -888,12 +818,11 @@ class MineViewModel @Inject constructor(
         appendLine(AppLog.dump())
 
         appendLine()
-        appendLine("===== 4. aggapp.log 落盘（全量，超 2MB 截尾保留最新） =====")
+        appendLine("===== 4. aggapp.log 落盘（安全摘要，历史原文默认省略） =====")
         val logFile = java.io.File(appContext.filesDir, "aggapp.log")
         if (logFile.exists()) {
-            val bytes = logFile.readBytes()
-            val text = String(bytes, Charsets.UTF_8)
-            appendLine(if (text.length > 2_000_000) text.takeLast(2_000_000) else text)
+            val len = logFile.length()
+            appendLine("aggapp.log 存在：文件大小 = $len 字节，历史原文因隐私安全已省略导出")
         } else {
             appendLine("（aggapp.log 不存在）")
         }

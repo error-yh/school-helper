@@ -138,10 +138,23 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
                 TimetableRules.validateExceptions(course.asDraft(), normalized, periods)
             }
             require(exceptionErrors.isEmpty()) { exceptionErrors.joinToString("\n") }
-            val states = loadImportTarget(before.settings.id).states
-            val candidate = before.copy(settings=normalized,periods=periods)
-            states.forEach { (id,state) ->
-                ImportNormalizationCodec.validate(state,candidate.scopeToken,candidate.settings.id,candidate.courses.single { it.id==id },candidate)
+            val states = try {
+                loadImportTarget(before.settings.id).states
+            } catch (_: InvalidNormalizationState) {
+                throw IllegalArgumentException("已有课程导入状态损坏，无法更新作息时间。")
+            }
+            val candidate = before.copy(settings = normalized, periods = periods)
+            val adaptedStates = states.mapValues { (id, state) ->
+                val course = candidate.courses.singleOrNull { it.id == id }
+                    ?: throw IllegalArgumentException("未找到归一化状态对应的课程。")
+                try {
+                    ImportNormalizationPeriodAdapter.adapt(state, before.periods, candidate.periods, course, candidate)
+                } catch (_: InvalidNormalizationState) {
+                    throw IllegalArgumentException("作息时间调整与已有导入课程状态冲突，无法保存。")
+                }
+            }
+            adaptedStates.forEach { (id, state) ->
+                dao.putImportState(ImportNormalizationStateEntity(id, state.version, ImportNormalizationCodec.encode(state)))
             }
             // UPDATE retains the semester row and therefore cannot cascade-delete its courses.
             val semester = requireNotNull(dao.semester())

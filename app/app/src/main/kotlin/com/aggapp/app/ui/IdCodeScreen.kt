@@ -94,7 +94,7 @@ fun renderCode128(content: String, width: Int = 1000, height: Int = 300): Bitmap
 @Composable
 fun IdCodeScreen(vm: MainViewModel) {
     val state by vm.state.collectAsState()
-    val platforms = Platform.entries.toList()
+    val platforms = Platform.activePlatforms
 
     // 双击全屏显示当前平台身份码（单击全屏任意处退出）
     var fullscreen by remember { mutableStateOf(false) }

@@ -22,6 +22,13 @@ import com.lingion.sleepy.data.local.TimetableDatabase
 import com.lingion.sleepy.domain.TimetableRules
 import com.lingion.sleepy.importing.DraftTimeRange
 import com.lingion.sleepy.domain.imports.FrozenImportSource
+import com.lingion.sleepy.domain.imports.IdentityArchive
+import com.lingion.sleepy.domain.imports.IdentityReviewKind
+import com.lingion.sleepy.domain.imports.SourceRelationChoice
+import com.lingion.sleepy.importing.ocr.*
+import com.lingion.sleepy.importing.formats.FormatParseContext
+import com.lingion.sleepy.importing.PositionedPage
+import com.lingion.sleepy.importing.PositionedText
 import com.lingion.sleepy.domain.imports.ImportApplyCommand
 import com.lingion.sleepy.domain.imports.ImportMode
 import com.lingion.sleepy.domain.imports.ImportReviewContext
@@ -67,6 +74,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -190,6 +198,282 @@ class AppendReimportAndNoticeAndroidTest {
         assertEquals("通知历史事件数应为1", 1, history.history.entries.size)
         assertEquals("事件状态应为 APPLIED", "APPLIED", history.history.entries.single().state)
         assertEquals("事件 ID 匹配", applied.eventId, history.history.entries.single().eventId)
+    }
+
+    // =========================================================================
+    // S7-PRE-FIX-01 验证：图片 INDEPENDENT review 链追加重导幂等性与零写入
+    // =========================================================================
+    @Test
+    fun appendImageWithIndependentIdentityReviewReimportIsIdempotentAndUnchanged(): Unit = runBlocking {
+        openProfile()
+        seedSemester()
+
+        val p0 = ReviewLocator(courseIndex = 0, meetingIndex = 0)
+        val p1 = ReviewLocator(courseIndex = 1, meetingIndex = 0)
+        val courses = listOf(
+            RichCourseDraft("Hadoop实验", meetings = listOf(RichMeetingDraft(MeetingKind.RECURRING, dayOfWeek = 5, weeks = setOf(7, 8), sections = setOf(1, 2), room = "信工401"))),
+            RichCourseDraft("编译原理实验", meetings = listOf(RichMeetingDraft(MeetingKind.RECURRING, dayOfWeek = 6, weeks = setOf(7, 8), sections = setOf(3, 4), room = "信工402")))
+        )
+        val format1 = FormatParseResult(RichTimetableDraft(courses = courses))
+        val source1 = FrozenImportSource.fromFormat(format1)
+        val session1 = ImportReviewSession.create(source1, ImportReviewContext(target(), ImportMode.APPEND, start, 16, defaultPeriods()))
+        val decisions1 = ImportReviewDecisions(
+            evidence = session1.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session1.reviewEvidence(it.fingerprint) },
+            identity = session1.reviewIdentity(
+                com.lingion.sleepy.domain.imports.IdentityReviewKind.INDEPENDENT,
+                listOf(com.lingion.sleepy.domain.imports.IdentityArchive(setOf(p0)), com.lingion.sleepy.domain.imports.IdentityArchive(setOf(p1)))
+            )
+        )
+        val reviewed1 = (RichDraftConverter.convert(session1, decisions1) as ImportReviewResult.Ready).reviewed
+        val preview1 = schedules.previewImport(reviewed1, emptyList())
+        assertTrue("第一次导入预览应 ready", preview1.ready)
+        assertFalse("第一次导入不应 unchanged", preview1.unchanged)
+
+        val cmd1 = ImportApplyCommand(target(), ImportMode.APPEND, reviewed1, preview1.preview.planDigest, emptyList())
+        val apply1 = schedules.applyImport(cmd1)
+        assertTrue("第一次导入应成功应用", apply1 is ImportApplyResult.Applied)
+        schedules.readImportTarget(1)
+
+        val snapAfterFirst = snapshot()
+        assertEquals("应包含两门课程", 2, snapAfterFirst.courses.size)
+        val revAfterFirst = snapAfterFirst.revision
+
+        // 第二次导入：相同内容再次以 INDEPENDENT 追加
+        val format2 = FormatParseResult(RichTimetableDraft(courses = courses))
+        val source2 = FrozenImportSource.fromFormat(format2)
+        val session2 = ImportReviewSession.create(source2, ImportReviewContext(target(), ImportMode.APPEND, start, 16, defaultPeriods()))
+        val decisions2 = ImportReviewDecisions(
+            evidence = session2.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session2.reviewEvidence(it.fingerprint) },
+            identity = session2.reviewIdentity(
+                com.lingion.sleepy.domain.imports.IdentityReviewKind.INDEPENDENT,
+                listOf(com.lingion.sleepy.domain.imports.IdentityArchive(setOf(p0)), com.lingion.sleepy.domain.imports.IdentityArchive(setOf(p1)))
+            )
+        )
+        val reviewed2 = (RichDraftConverter.convert(session2, decisions2) as ImportReviewResult.Ready).reviewed
+        val preview2 = schedules.previewImport(reviewed2, emptyList())
+        assertTrue("第二次导入预览应 ready", preview2.ready)
+        assertTrue("所有安排已存在，第二次导入必须 unchanged", preview2.unchanged)
+
+        val cmd2 = ImportApplyCommand(target(), ImportMode.APPEND, reviewed2, preview2.preview.planDigest, emptyList())
+        val apply2 = schedules.applyImport(cmd2)
+        assertTrue("第二次导入应用应成功（零写入）", apply2 is ImportApplyResult.Applied)
+        schedules.readImportTarget(1)
+
+        val snapAfterSecond = snapshot()
+        assertEquals("课程总数绝不应翻倍，仍为 2 门", 2, snapAfterSecond.courses.size)
+        assertEquals("零写入：revision 保持不变", revAfterFirst, snapAfterSecond.revision)
+    }
+
+    // =========================================================================
+    // S7-PRE-FIX-01-R1 核心数据库回归：8行同名多日期实验、来源变化核对、单次调课与作息联动保护
+    // =========================================================================
+    @Test
+    fun sameTitleMultiDateExperimentsAppendWithSourceChangeGuardsAdjustmentsPeriodsAndPersistence(): Unit = runBlocking {
+        openProfile()
+        seedSemester()
+
+        // 1. 首次导入：8 行同名无代码多日期实验课入库
+        val reviewed1 = buildOcrReviewedImport(ocrDateRows(8, 0f), "ocr-source-8rows-1")
+        val preview1 = schedules.previewImport(reviewed1, emptyList())
+        assertTrue("第一次导入必须 ready: ${preview1.problems}", preview1.ready)
+        assertFalse("第一次导入不应 unchanged", preview1.unchanged)
+
+        val cmd1 = ImportApplyCommand(target(), ImportMode.APPEND, reviewed1, preview1.preview.planDigest, emptyList())
+        val apply1 = schedules.applyImport(cmd1)
+        assertTrue("第一次导入必须成功应用", apply1 is ImportApplyResult.Applied)
+        schedules.readImportTarget(1)
+
+        val snapAfterFirst = snapshot()
+        assertEquals("底层必须落成 8 门独立课程档案", 8, snapAfterFirst.courses.size)
+        val revAfterFirst = snapAfterFirst.revision
+
+        // 2. 单次调课：对第 1 次实验（2026-10-24）应用教室变更
+        val adjustDate = LocalDate.of(2026, 10, 24)
+        val occsBefore = occurrences(adjustDate).filter { it.course.courseName.contains("Hadoop") }
+        assertTrue("调整日前必须有该实验发生", occsBefore.isNotEmpty())
+        assertEquals("初始教室为信工楼401", "信工楼401", occsBefore.single().effectiveRoom)
+
+        val adjustIntent = parseIntent("2026-10-24Hadoop大数据实验教室改为信工实验楼502")
+        val confirmation = confirmNotice(adjustIntent)
+        val applyNotice = repository.apply(confirmation) as NoticeAdjustmentApplyResult.Applied
+        val revAfterNotice = snapshot().revision
+        assertTrue("应用调课后 revision 必须增加", revAfterNotice > revAfterFirst)
+
+        val occsAfterNotice = occurrences(adjustDate).filter { it.course.courseName.contains("Hadoop") }
+        assertTrue("调课后教室应变为信工实验楼502", occsAfterNotice.all { it.effectiveRoom == "信工实验楼502" })
+
+        // 3. 作息时间修改（与 FIX-02 联动）：顺延 10 分钟
+        val updatedPeriods = defaultPeriods().map { p ->
+            p.copy(start = p.start.plusMinutes(10), end = p.end.plusMinutes(10))
+        }
+        schedules.updateSettings(SemesterSettings(1, "Synthetic S5-03 term", start, 16), updatedPeriods)
+        val revAfterPeriod = snapshot().revision
+        assertTrue("修改作息后 revision 必须增加", revAfterPeriod > revAfterNotice)
+        val targetAfterPeriod = schedules.readImportTarget(1)
+        assertEquals("修改作息后 ImportTarget 状态必须保持合法", 16, targetAfterPeriod.snapshot.settings.totalWeeks)
+
+        // 4. 来源变化后的再次 APPEND 重导：来源ID改变（ocr-source-8rows-2），坐标平移 0.5px
+        // 来源核对守卫：若未确认来源关系，必须要求核对
+        val reviewed2NoChoice = buildOcrReviewedImport(ocrDateRows(8, 0.5f), "ocr-source-8rows-2", null)
+        val preview2NoChoice = schedules.previewImport(reviewed2NoChoice, emptyList())
+        assertTrue("来源变化时必须要求来源关系核对", preview2NoChoice.sourceRelationRequired)
+        assertFalse("来源未确认时 preview 不应 ready", preview2NoChoice.ready)
+
+        // 回答 DIFFERENT_SOURCE 确认来源关系
+        val reviewed2 = buildOcrReviewedImport(ocrDateRows(8, 0.5f), "ocr-source-8rows-2", SourceRelationChoice.DIFFERENT_SOURCE)
+        val preview2 = schedules.previewImport(reviewed2, emptyList())
+        assertTrue("确认来源关系后 preview 必须 ready: ${preview2.problems}", preview2.ready)
+        assertTrue("【核心回归】8 行同名实验即使来源ID与坐标微抖，重导也必须判定为 unchanged！", preview2.unchanged)
+
+        // 验证取消/未应用时的零写入（比较 snapshot、importStates 含 payload、事件历史与 revision）
+        val snapBeforeApply = snapshot()
+        val importStatesBeforeApply = db.scheduleDao().importStates(1)
+        val historyBeforeApply = (repository.history() as NoticeAdjustmentHistoryResult.Loaded).history.entries
+        assertEquals("零写入：revision 未变", revAfterPeriod, snapBeforeApply.revision)
+        assertEquals("零写入：课程数量依然为 8", 8, snapBeforeApply.courses.size)
+
+        // 执行应用 apply（全重复幂等）
+        val cmd2 = ImportApplyCommand(target(), ImportMode.APPEND, reviewed2, preview2.preview.planDigest, emptyList())
+        val apply2 = schedules.applyImport(cmd2)
+        assertTrue("第二次导入应用应成功（零写入）", apply2 is ImportApplyResult.Applied)
+        schedules.readImportTarget(1)
+
+        val snapAfterSecond = snapshot()
+        assertEquals("【核心断言】重导绝不增加新课程，课程总数保持 8 门", 8, snapAfterSecond.courses.size)
+        assertEquals("零写入：全重复应用前后 revision 严格全等", revAfterPeriod, snapAfterSecond.revision)
+        assertEquals("零写入：全重复应用前后 完整 TimetableSnapshot 严格全等", snapBeforeApply, snapAfterSecond)
+        assertEquals("零写入：全重复应用前后 完整 importStates 含 payload 严格全等", importStatesBeforeApply, db.scheduleDao().importStates(1))
+        assertEquals("零写入：全重复应用前后 历史事件列表严格全等", historyBeforeApply, (repository.history() as NoticeAdjustmentHistoryResult.Loaded).history.entries)
+
+        // 8 个日期与实验项目的完整性细粒度校验
+        for (i in 0 until 8) {
+            val date = LocalDate.of(2026, 10, 24).plusDays((i * 7).toLong())
+            val occs = occurrences(date).filter { it.course.courseName.contains("Hadoop") }
+            assertEquals("第 ${i + 1} 次实验在 $date 必须恰好有 1 条发生", 1, occs.size)
+            val occ = occs.single()
+            if (i == 0) {
+                assertEquals("调整日（第1次实验）教室保持信工实验楼502", "信工实验楼502", occ.effectiveRoom)
+            } else {
+                assertEquals("未调整日（第 ${i + 1} 次实验）教室保持信工楼401", "信工楼401", occ.effectiveRoom)
+            }
+            assertEquals("实验项目必须精确保留", "MapReduce编程$i", occ.meeting.experimentProject)
+            assertTrue("来源 provenance 必须非空保持", occ.meeting.provenance.isNotEmpty())
+        }
+
+        // 5. 撤销单次调课
+        val undoResult = repository.undo(applyNotice.eventId, snapAfterSecond.revision)
+        assertTrue("重导后单次调课仍能正常撤销", undoResult is NoticeAdjustmentUndoResult.Undone)
+        val occsAfterUndo = occurrences(adjustDate).filter { it.course.courseName.contains("Hadoop") }
+        assertEquals("撤销后教室恢复信工楼401", "信工楼401", occsAfterUndo.single().effectiveRoom)
+
+        // 6. 关闭并重新打开数据库
+        db.close()
+        val reopenedDb = TimetableDatabase.open(context, profile).also(databases::add)
+        val reopenedSchedules = RoomScheduleRepository(reopenedDb)
+        val reopenedTarget = reopenedSchedules.readImportTarget(1)
+        assertEquals(8, reopenedTarget.snapshot.courses.size)
+
+        // 验证旧 reviewed2 因撤销操作推进了 revision 而被正确拒绝（STALE_REVISION）
+        val stalePreview = reopenedSchedules.previewImport(reviewed2, emptyList())
+        assertFalse("旧 reviewed 包含过期 revision，必须被拒绝", stalePreview.ready)
+
+        // 从重开后的最新 target 重新构建 review
+        val snapReopened = reopenedTarget.snapshot
+        val currentReopenedTarget = ImportTarget(snapReopened.scopeToken, 1, snapReopened.revision, reopenedDb.openHelper.readableDatabase.version)
+        val parsedReopened = parseSyntheticOcr(ocrDateRows(8, 0.5f), "ocr-source-8rows-2")
+        val sourceReopened = FrozenImportSource.fromOcr(parsedReopened)
+        val sessionReopened = ImportReviewSession.create(
+            sourceReopened,
+            ImportReviewContext(currentReopenedTarget, ImportMode.APPEND, start, snapReopened.settings.totalWeeks, snapReopened.periods),
+        )
+        val archivesReopened = sessionReopened.selectedMeetings.groupBy { it.courseIndex!! }.values.map {
+            IdentityArchive(it.toSet())
+        }
+        val identityReopened = sessionReopened.reviewIdentity(IdentityReviewKind.INDEPENDENT, archivesReopened)
+        val evidenceReopened = sessionReopened.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { sessionReopened.reviewEvidence(it.fingerprint) }
+        val decisionsReopened = ImportReviewDecisions(
+            evidence = evidenceReopened,
+            identity = identityReopened,
+            sourceRelation = sessionReopened.reviewSourceRelation(SourceRelationChoice.DIFFERENT_SOURCE)
+        )
+        val convReopened = RichDraftConverter.convert(sessionReopened, decisionsReopened)
+        if (convReopened is ImportReviewResult.Blocked) {
+            fail("reopened review failed: problems=${convReopened.problems}, requirements=${convReopened.requirements}")
+        }
+        val reviewed3 = (convReopened as ImportReviewResult.Ready).reviewed
+
+        val previewAfterReopen = reopenedSchedules.previewImport(reviewed3, emptyList())
+        assertTrue("从最新 target 重建后 preview 必须 ready: ${previewAfterReopen.problems}", previewAfterReopen.ready)
+        assertTrue("数据库重开后依然判定为 unchanged", previewAfterReopen.unchanged)
+    }
+
+    private fun word(t: String, x: Float, y: Float, w: Float = 72f, h: Float = 10f, page: Int = 1) =
+        OcrSpan(t, OcrLevel.WORD, 95f, SourcePosition(page, TextBox(x, y, x + w, y + h)))
+
+    private fun ocrDateRows(count: Int = 8, xOffset: Float = 0f): List<OcrSpan> {
+        val out = mutableListOf<OcrSpan>()
+        listOf("日期", "星期", "周次", "节次", "时间", "课程名称", "备注", "实验项目", "实验室", "班组").forEachIndexed { i, s ->
+            out += word(s, i * 140f + xOffset, 20f)
+        }
+        repeat(count) { i ->
+            val date = LocalDate.of(2026, 10, 24).plusDays((i * 7).toLong())
+            val fields = listOf(
+                date.toString().replace("-", ""), "${date.dayOfWeek.value}", "7,8", "1,2", "08:00-09:40",
+                "Hadoop大数据实验", "普通备注", "MapReduce编程$i", "信工楼401", "第${i + 1}组"
+            )
+            fields.forEachIndexed { j, s ->
+                out += word(s, j * 140f + xOffset, 60f + i * 28f, 72f)
+            }
+        }
+        return out
+    }
+
+    private fun parseSyntheticOcr(spans: List<OcrSpan>, sourceId: String): OcrLayoutParseResult {
+        val p = PositionedPage(1, 1500f, 2000f, emptyList<PositionedText>())
+        val page = OcrLayoutPage(1, p.width, p.height, listOf(
+            OcrVariantEvidence(
+                OcrVariantId.ORIGINAL, 1500, 2000,
+                PageAffineTransform.IDENTITY, p, spans, emptySet(), null,
+                OcrWordQuality.EMPTY, true
+            )
+        ), OcrVariantId.ORIGINAL)
+        val ctx = OcrLayoutContext(
+            FormatParseContext(sourceId, 20),
+            confirmedTermMonday = start,
+            referenceDate = start
+        )
+        return OcrTimetableParser().parse(OcrLayoutDocument(listOf(page)), ctx)
+    }
+
+    private suspend fun buildOcrReviewedImport(
+        spans: List<OcrSpan>,
+        sourceId: String,
+        sourceRelationChoice: SourceRelationChoice? = null
+    ): ReviewedImport {
+        val snap = snapshot()
+        val currentTarget = target()
+        val parsed = parseSyntheticOcr(spans, sourceId)
+        val source = FrozenImportSource.fromOcr(parsed)
+        val session = ImportReviewSession.create(
+            source,
+            ImportReviewContext(currentTarget, ImportMode.APPEND, start, snap.settings.totalWeeks, snap.periods),
+        )
+        val archives = session.selectedMeetings.groupBy { it.courseIndex!! }.values.map {
+            IdentityArchive(it.toSet())
+        }
+        val identity = session.reviewIdentity(IdentityReviewKind.INDEPENDENT, archives)
+        val evidence = session.requirements.filter { it.kind == ReviewRequirementKind.EVIDENCE }.map { session.reviewEvidence(it.fingerprint) }
+        val decisions = ImportReviewDecisions(
+            evidence = evidence,
+            identity = identity,
+            sourceRelation = sourceRelationChoice?.let { session.reviewSourceRelation(it) }
+        )
+        val res = RichDraftConverter.convert(session, decisions)
+        if (res is ImportReviewResult.Blocked) {
+            fail("buildOcrReviewedImport failed: problems=${res.problems}, requirements=${res.requirements}")
+        }
+        val ready = res as ImportReviewResult.Ready
+        return ready.reviewed
     }
 
     // =========================================================================
