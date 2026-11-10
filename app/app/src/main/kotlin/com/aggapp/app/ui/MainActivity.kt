@@ -1,5 +1,6 @@
 package com.aggapp.app.ui
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,7 +21,11 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -33,30 +38,70 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.aggapp.app.ui.theme.AggTheme
+import com.aggapp.app.widget.TodayWidget
+import com.aggapp.app.widget.WidgetLink
 import com.lingion.sleepy.api.TimetableDependencies
+import com.lingion.sleepy.api.TimetableOpenTarget
 import com.lingion.sleepy.ui.TimetableRoute
 import dagger.hilt.android.AndroidEntryPoint
+import java.util.UUID
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var timetableDependencies: TimetableDependencies
+    private var widgetLaunch by mutableStateOf<WidgetLaunch?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        widgetLaunch = WidgetLink.read(intent, packageName)?.let {
+            WidgetLaunch(savedInstanceState?.getString("widgetLaunchId") ?: UUID.randomUUID().toString(), it)
+        }
         setContent {
             AggTheme {
                 val navController = rememberNavController()
-                AggScaffold(navController, timetableDependencies)
+                AggScaffold(navController, timetableDependencies, widgetLaunch)
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val target = WidgetLink.read(intent, packageName) ?: return
+        setIntent(intent)
+        widgetLaunch = WidgetLaunch(UUID.randomUUID().toString(), target)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        TodayWidget.refresh(this)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("widgetLaunchId", widgetLaunch?.id)
+    }
+
 }
+
+internal data class WidgetLaunch(val id: String, val target: TimetableOpenTarget)
 
 private data class TabItem(val route: String, val label: String, val icon: @Composable () -> Unit)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun AggScaffold(navController: NavHostController, timetableDependencies: TimetableDependencies) {
+internal fun AggScaffold(
+    navController: NavHostController,
+    timetableDependencies: TimetableDependencies,
+    widgetLaunch: WidgetLaunch? = null,
+) {
+    LaunchedEffect(widgetLaunch?.id) {
+        if (widgetLaunch != null && navController.currentDestination?.route != "timetable") {
+            if (!navController.popBackStack("timetable", inclusive = false)) {
+                navController.navigate("timetable") { launchSingleTop = true }
+            }
+        }
+    }
     val tabs = listOf(
         TabItem("timetable", "课表") { Icon(Icons.Filled.Home, null) },
         TabItem("express", "快递") { Icon(Icons.Filled.LocalShipping, null) },
@@ -107,7 +152,11 @@ fun AggScaffold(navController: NavHostController, timetableDependencies: Timetab
             popEnterTransition = { fadeIn(tween(180)) },
             popExitTransition = { fadeOut(tween(120)) },
         ) {
-            composable("timetable") { TimetableRoute(timetableDependencies) }
+            composable("timetable") {
+                key(widgetLaunch?.id) {
+                    TimetableRoute(timetableDependencies, openTarget = widgetLaunch?.target)
+                }
+            }
             composable("express") {
                 Box(Modifier.fillMaxSize().testTag("express-page")) {
                     ExpressScreen()

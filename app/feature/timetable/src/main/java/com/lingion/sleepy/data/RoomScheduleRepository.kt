@@ -41,12 +41,17 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
         TimetableWriteCoordinator.withWriteLock {
             database.withTransaction { initializeIfEmpty() }
         }
-        // Every write changes the semester revision last, in the same transaction as its child rows.
-        // Read the actual revision and all nested rows together; racing invalidations may be coalesced.
-        emitAll(dao.observeRevision().map {
-            database.withTransaction { readSnapshot() }
-        }.distinctUntilChanged())
+        emitAll(observeTimetableReadOnly())
     }
+
+    // Every write changes the revision in the same transaction as the child rows.
+    // The widget uses this entry point so an empty timetable is never seeded by a widget read.
+    fun observeTimetableReadOnly(): Flow<TimetableSnapshot> = dao.observeRevision().map {
+        database.withTransaction {
+            if (dao.semester(1) == null) TimetableSnapshot(periods = emptyList(), scopeToken = database.scopeToken)
+            else readSnapshot()
+        }
+    }.distinctUntilChanged()
 
     override suspend fun saveCourse(draft: CourseDraft, id: Long?): Long =
         TimetableWriteCoordinator.withWriteLock {

@@ -21,10 +21,12 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lingion.sleepy.api.TimetableDependencies
+import com.lingion.sleepy.api.TimetableOpenTarget
 import com.lingion.sleepy.data.CourseDisplayGroupKey
 import com.lingion.sleepy.data.SharedPreferencesCourseDisplayGroupStore
 import com.lingion.sleepy.domain.TimetableRules
 import com.lingion.sleepy.domain.formatNumberSet
+import com.lingion.sleepy.domain.model.CourseOccurrence
 import com.lingion.sleepy.domain.model.ScheduledCourse
 import com.lingion.sleepy.domain.model.TimetableSnapshot
 import com.lingion.sleepy.ui.component.SectionHeader
@@ -33,7 +35,11 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 @Composable
-fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Modifier) {
+fun TimetableRoute(
+    dependencies: TimetableDependencies,
+    modifier: Modifier = Modifier,
+    openTarget: TimetableOpenTarget? = null,
+) {
     var importOpen by rememberSaveable { mutableStateOf(false) }
     var noticeHistoryOpen by rememberSaveable { mutableStateOf(false) }
     var manualOccurrenceOpen by rememberSaveable { mutableStateOf(false) }
@@ -71,7 +77,7 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
     val model: TimetableViewModel = viewModel(factory = factory)
     val state by model.uiState.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    var browsingDate by rememberSaveable { mutableStateOf<String?>(null) }
+    var browsingDate by rememberSaveable { mutableStateOf(openTarget?.date?.toString()) }
     var browsingMonday by rememberSaveable { mutableStateOf<String?>(null) }
     var deviceDate by remember { mutableStateOf(LocalDate.now(ZoneId.systemDefault())) }
     val owner = LocalLifecycleOwner.current
@@ -91,6 +97,17 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
     val date = browsingDate?.let(LocalDate::parse) ?: deviceDate
     val monday = browsingMonday?.let(LocalDate::parse) ?: TimetableRules.mondayOf(deviceDate)
     var selectedId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var widgetDetailsOpen by rememberSaveable { mutableStateOf(openTarget?.occurrence != null) }
+    val widgetOccurrence = remember(state.snapshot, widgetDetailsOpen, openTarget) {
+        if (widgetDetailsOpen) openTarget?.date?.let { openTarget.occurrence?.resolve(state.snapshot, it) }
+        else null
+    }
+    LaunchedEffect(widgetDetailsOpen, widgetOccurrence, state.isLoading, state.hasReadError) {
+        if (widgetDetailsOpen && widgetOccurrence == null && !state.isLoading && !state.hasReadError) {
+            widgetDetailsOpen = false
+            browsingDate = null
+        }
+    }
     var editorOpen by rememberSaveable { mutableStateOf(false) }
     var editingId by rememberSaveable { mutableStateOf<Long?>(null) }
     var editorSession by rememberSaveable { mutableIntStateOf(0) }
@@ -103,14 +120,14 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
                     editorStateHolder.removeState(editorSession)
                     editorOpen = false; selectedId = null; tab = 2
                 }
-                TimetableOperation.COURSE_DELETED -> { selectedId = null; confirmDelete = false }
+                TimetableOperation.COURSE_DELETED -> { selectedId = null; widgetDetailsOpen = false; confirmDelete = false }
                 else -> Unit
             }
         }
     }
     fun openEditor(course: ScheduledCourse?) {
         editorStateHolder.removeState(editorSession)
-        model.clearMessage(); editingId = course?.id; selectedId = null
+        model.clearMessage(); editingId = course?.id; selectedId = null; widgetDetailsOpen = false
         editorSession++; editorOpen = true
     }
     val settingsStateHolder=rememberSaveableStateHolder()
@@ -317,7 +334,7 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
             }
         }
     }
-    val selected = state.snapshot.courses.singleOrNull { it.id == selectedId }
+    val selected = widgetOccurrence?.course ?: state.snapshot.courses.singleOrNull { it.id == selectedId }
     if (selected != null && !editorOpen) {
         if (confirmDelete) {
             AlertDialog(onDismissRequest = { if (!state.isSaving) confirmDelete = false },
@@ -330,7 +347,8 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
             CourseDetails(
                 course = selected,
                 snapshot = state.snapshot,
-                onClose = { selectedId = null },
+                onClose = { selectedId = null; widgetDetailsOpen = false },
+                occurrence = widgetOccurrence,
                 onEdit = { openEditor(selected) },
                 onDelete = { model.clearMessage(); confirmDelete = true },
                 onManualOccurrence = if (noticeRepo != null) { mode ->
@@ -338,6 +356,7 @@ fun TimetableRoute(dependencies: TimetableDependencies, modifier: Modifier = Mod
                     manualOccurrenceInitialMode = mode
                     manualOccurrenceOpen = true
                     selectedId = null
+                    widgetDetailsOpen = false
                 } else null,
                 enabled = canWrite
             )
@@ -353,6 +372,7 @@ private fun CourseDetails(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onManualOccurrence: ((ManualOccurrenceMode) -> Unit)? = null,
+    occurrence: CourseOccurrence? = null,
     enabled: Boolean
 ) {
     AlertDialog(onDismissRequest = onClose,
@@ -360,22 +380,31 @@ private fun CourseDetails(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(course.courseName, style = MaterialTheme.typography.titleLarge)
-                Text("教师：${course.teacher.ifBlank { "未填写" }}")
-                Text("地点：${course.room.ifBlank { "未填写" }}")
-                course.meetings.forEachIndexed { index, meeting ->
-                    HorizontalDivider()
-                    Text("安排 ${index + 1} · ${meetingScheduleSummary(meeting)}")
-                    Text("节次：${formatNumberSet(meeting.sections).ifEmpty { "自定义" }}")
-                    val times = TimetableRules.periodIntervals(meeting, snapshot.periods)
-                    Text("时间：${times.joinToString(" / ") { "${it.start}–${it.end}" }.ifEmpty { "未设置" }}${if (meeting.customTime != null) "（自定义）" else ""}")
-                    val missing = if (meeting.customTime == null) meeting.sections - snapshot.periods.map { it.number }.toSet() else emptySet()
-                    if (missing.isNotEmpty()) Text("未定位节次：${formatNumberSet(missing)}，请在设置中补充作息。", color = MaterialTheme.colorScheme.error)
-                    meeting.teacher?.let { Text("本次教师：${it.ifBlank { "未填写" }}") }
-                    meeting.room?.let { Text("本次地点：${it.ifBlank { "未填写" }}") }
-                    meeting.experimentProject?.let { Text("项目：$it") }
-                    meeting.group?.let { Text("分组：$it") }
-                    meeting.exceptions.forEach { Text("例外：${it.kind} ${it.originalDate ?: ""} ${it.targetDate ?: ""}") }
-                    meeting.provenance.forEach { source -> source.rawText?.let { Text("来源：$it") } }
+                if (occurrence != null) {
+                    Text(occurrence.date.toString())
+                    Text(occurrence.timeRanges.joinToString(" / ") { "${it.start}–${it.end}" })
+                    occurrence.effectiveTeacher.takeIf { it.isNotBlank() }?.let { Text("教师：$it") }
+                    occurrence.effectiveRoom.takeIf { it.isNotBlank() }?.let { Text("地点：$it") }
+                    occurrence.effectiveProject?.takeIf { it.isNotBlank() }?.let { Text("项目：$it") }
+                    occurrence.effectiveGroup?.takeIf { it.isNotBlank() }?.let { Text("分组：$it") }
+                } else {
+                    Text("教师：${course.teacher.ifBlank { "未填写" }}")
+                    Text("地点：${course.room.ifBlank { "未填写" }}")
+                    course.meetings.forEachIndexed { index, meeting ->
+                        HorizontalDivider()
+                        Text("安排 ${index + 1} · ${meetingScheduleSummary(meeting)}")
+                        Text("节次：${formatNumberSet(meeting.sections).ifEmpty { "自定义" }}")
+                        val times = TimetableRules.periodIntervals(meeting, snapshot.periods)
+                        Text("时间：${times.joinToString(" / ") { "${it.start}–${it.end}" }.ifEmpty { "未设置" }}${if (meeting.customTime != null) "（自定义）" else ""}")
+                        val missing = if (meeting.customTime == null) meeting.sections - snapshot.periods.map { it.number }.toSet() else emptySet()
+                        if (missing.isNotEmpty()) Text("未定位节次：${formatNumberSet(missing)}，请在设置中补充作息。", color = MaterialTheme.colorScheme.error)
+                        meeting.teacher?.let { Text("本次教师：${it.ifBlank { "未填写" }}") }
+                        meeting.room?.let { Text("本次地点：${it.ifBlank { "未填写" }}") }
+                        meeting.experimentProject?.let { Text("项目：$it") }
+                        meeting.group?.let { Text("分组：$it") }
+                        meeting.exceptions.forEach { Text("例外：${it.kind} ${it.originalDate ?: ""} ${it.targetDate ?: ""}") }
+                        meeting.provenance.forEach { source -> source.rawText?.let { Text("来源：$it") } }
+                    }
                 }
 
                 if (onManualOccurrence != null) {

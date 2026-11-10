@@ -1,11 +1,18 @@
 package com.aggapp.app
 
 import android.app.Application
+import android.content.res.Configuration
+import com.aggapp.app.widget.TodayWidget
 import com.aggapp.platform.api.AppLog
 import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
 class AggApp : Application() {
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        TodayWidget.refresh(this)
+    }
+
     override fun onCreate() {
         super.onCreate()
         // 应用内日志环同步镜像到 logcat（「我的」页日志板块展示 AppLog 环内容）

@@ -158,7 +158,7 @@ class TimetableProfileActivator @Inject constructor(
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    internal fun observeTimetableDynamic(): Flow<TimetableSnapshot> = flow {
+    internal fun observeTimetableDynamic(readOnly: Boolean = false): Flow<TimetableSnapshot> = flow {
         lifecycle.withLock { loadProfile() }
         emitAll(active.filterNotNull().flatMapLatest { profile ->
             flow {
@@ -170,7 +170,7 @@ class TimetableProfileActivator @Inject constructor(
                 }
                 if (!acquired) return@flow
                 try {
-                    emitAll(profile.schedule.observeTimetable())
+                    emitAll(if (readOnly) profile.schedule.observeTimetableReadOnly() else profile.schedule.observeTimetable())
                 } finally {
                     withContext(NonCancellable + Dispatchers.IO) {
                         lifecycle.withLock {

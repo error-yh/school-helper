@@ -63,6 +63,8 @@ android {
                 ".migrationtest.target"
             } else if (providers.gradleProperty("schoolHelperMigrationSandbox").orNull == "true") {
                 ".migrationtest"
+            } else if (providers.gradleProperty("schoolHelperWidgetSandbox").orNull == "true") {
+                ".widgettest"
             } else {
                 ".debug"
             }
