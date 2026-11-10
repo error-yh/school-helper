@@ -5,6 +5,8 @@
  */
 package com.lingion.sleepy.data
 
+import com.lingion.sleepy.data.backup.TimetableWriteCoordinator
+
 import android.database.sqlite.SQLiteConstraintException
 import androidx.room.withTransaction
 import com.lingion.sleepy.data.local.CourseMeetingEntity
@@ -142,7 +144,12 @@ class RoomNoticeAdjustmentRepository(private val database: TimetableDatabase) : 
         }
     }
 
-    override suspend fun apply(confirmation: NoticeAdjustmentConfirmation): NoticeAdjustmentApplyResult {
+    override suspend fun apply(confirmation: NoticeAdjustmentConfirmation): NoticeAdjustmentApplyResult =
+        TimetableWriteCoordinator.withWriteLock {
+            applyLocked(confirmation)
+        }
+
+    private suspend fun applyLocked(confirmation: NoticeAdjustmentConfirmation): NoticeAdjustmentApplyResult {
         currentCoroutineContext().ensureActive()
         val scope = confirmation.target.scopeToken
         val semester = confirmation.target.semesterId
@@ -235,7 +242,12 @@ class RoomNoticeAdjustmentRepository(private val database: TimetableDatabase) : 
         }
     }
 
-    override suspend fun undo(eventId: Long, expectedRevision: Long): NoticeAdjustmentUndoResult {
+    override suspend fun undo(eventId: Long, expectedRevision: Long): NoticeAdjustmentUndoResult =
+        TimetableWriteCoordinator.withWriteLock {
+            undoLocked(eventId, expectedRevision)
+        }
+
+    private suspend fun undoLocked(eventId: Long, expectedRevision: Long): NoticeAdjustmentUndoResult {
         currentCoroutineContext().ensureActive()
         return try {
             database.withTransaction { undoInside(eventId, expectedRevision) }

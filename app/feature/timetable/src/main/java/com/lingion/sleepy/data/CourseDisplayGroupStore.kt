@@ -4,6 +4,8 @@
  */
 package com.lingion.sleepy.data
 
+import com.lingion.sleepy.data.backup.TimetableWriteCoordinator
+
 import android.content.Context
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -167,7 +169,12 @@ internal class SharedPreferencesCourseDisplayGroupStore(
         }
     }
 
-    override suspend fun write(key: CourseDisplayGroupKey, groups: List<CourseDisplayGroup>): CourseDisplayGroupWrite {
+    override suspend fun write(key: CourseDisplayGroupKey, groups: List<CourseDisplayGroup>): CourseDisplayGroupWrite =
+        TimetableWriteCoordinator.withWriteLock {
+            writeInternal(key, groups)
+        }
+
+    private fun writeInternal(key: CourseDisplayGroupKey, groups: List<CourseDisplayGroup>): CourseDisplayGroupWrite {
         val encoded = try {
             if (groups.isEmpty()) null else CourseDisplayGroupCodec.encode(groups)
         } catch (_: IllegalArgumentException) {

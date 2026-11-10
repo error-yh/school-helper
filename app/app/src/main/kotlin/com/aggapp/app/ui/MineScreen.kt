@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.aggapp.app.migration.TimetableBackupSection
 import com.aggapp.core.model.Platform
 
 /**
@@ -433,6 +434,9 @@ fun MineScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
             ) { Text("导出调试日志（操作/请求/登录态）") }
+
+            // ===== 课表备份与恢复 =====
+            TimetableBackupSection()
 
             // ===== 开源许可与说明入口 =====
             OutlinedButton(

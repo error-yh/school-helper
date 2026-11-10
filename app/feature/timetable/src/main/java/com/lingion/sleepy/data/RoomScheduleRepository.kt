@@ -1,5 +1,7 @@
 package com.lingion.sleepy.data
 
+import com.lingion.sleepy.data.backup.TimetableWriteCoordinator
+
 import androidx.room.withTransaction
 import com.lingion.sleepy.data.local.CourseMeetingEntity
 import com.lingion.sleepy.data.local.MeetingSectionEntity
@@ -36,7 +38,9 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
     internal var importTestFault: (String) -> Unit = {}
 
     override fun observeTimetable(): Flow<TimetableSnapshot> = flow {
-        database.withTransaction { initializeIfEmpty() }
+        TimetableWriteCoordinator.withWriteLock {
+            database.withTransaction { initializeIfEmpty() }
+        }
         // Every write changes the semester revision last, in the same transaction as its child rows.
         // Read the actual revision and all nested rows together; racing invalidations may be coalesced.
         emitAll(dao.observeRevision().map {
@@ -44,7 +48,12 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
         }.distinctUntilChanged())
     }
 
-    override suspend fun saveCourse(draft: CourseDraft, id: Long?): Long = database.withTransaction {
+    override suspend fun saveCourse(draft: CourseDraft, id: Long?): Long =
+        TimetableWriteCoordinator.withWriteLock {
+            saveCourseLocked(draft, id)
+        }
+
+    private suspend fun saveCourseLocked(draft: CourseDraft, id: Long?): Long = database.withTransaction {
         initializeIfEmpty()
         val before = readSnapshot()
         val normalized = draft.copy(
@@ -98,7 +107,12 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
         courseId
     }
 
-    override suspend fun deleteCourse(id: Long) {
+    override suspend fun deleteCourse(id: Long) =
+        TimetableWriteCoordinator.withWriteLock {
+            deleteCourseLocked(id)
+        }
+
+    private suspend fun deleteCourseLocked(id: Long) {
         database.withTransaction {
             initializeIfEmpty()
             require(id > 0 && dao.course(id) != null) { "未找到要删除的课程" }
@@ -107,7 +121,12 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
         }
     }
 
-    override suspend fun updateSettings(settings: SemesterSettings, periods: List<Period>) {
+    override suspend fun updateSettings(settings: SemesterSettings, periods: List<Period>) =
+        TimetableWriteCoordinator.withWriteLock {
+            updateSettingsLocked(settings, periods)
+        }
+
+    private suspend fun updateSettingsLocked(settings: SemesterSettings, periods: List<Period>) {
         database.withTransaction {
             initializeIfEmpty()
             val before = readSnapshot()
@@ -198,7 +217,12 @@ class RoomScheduleRepository(private val database: TimetableDatabase) : Schedule
         projectImportPreview(ImportOccurrencePlanner.plan(verifiedReview(reviewed), loadImportTarget(reviewed.context.target.semesterId), conflicts),conflicts)
     }
 
-    override suspend fun applyImport(command: ImportApplyCommand): ImportApplyResult = try {
+    override suspend fun applyImport(command: ImportApplyCommand): ImportApplyResult =
+        TimetableWriteCoordinator.withWriteLock {
+            applyImportLocked(command)
+        }
+
+    private suspend fun applyImportLocked(command: ImportApplyCommand): ImportApplyResult = try {
         database.withTransaction {
             val reviewed = verifiedReview(command.reviewed)
             val loaded = loadImportTarget(command.target.semesterId)

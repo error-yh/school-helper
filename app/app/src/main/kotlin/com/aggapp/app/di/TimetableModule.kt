@@ -1,19 +1,13 @@
 package com.aggapp.app.di
 
-import android.content.Context
 import com.lingion.sleepy.api.TimetableDependencies
-import com.lingion.sleepy.data.RoomNoticeAdjustmentRepository
-import com.lingion.sleepy.data.RoomScheduleRepository
-import com.lingion.sleepy.data.local.TimetableDatabase
 import com.lingion.sleepy.domain.repository.ScheduleRepository
 import com.lingion.sleepy.domain.repository.ImportRepository
 import com.lingion.sleepy.domain.repository.NoticeAdjustmentRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
-import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import java.util.UUID
 import javax.inject.Singleton
 
 @Module
@@ -21,30 +15,17 @@ import javax.inject.Singleton
 object TimetableModule {
     @Provides
     @Singleton
-    fun provideTimetableDatabase(@ApplicationContext context: Context): TimetableDatabase {
-        val prefs = context.getSharedPreferences("timetable_local_profile", Context.MODE_PRIVATE)
-        val profileId = prefs.getString("id", null) ?: UUID.randomUUID().toString().also { id ->
-            check(prefs.edit().putString("id", id).commit()) { "Unable to persist local timetable profile" }
-        }
-        return TimetableDatabase.open(context, profileId)
-    }
+    fun provideScheduleRepository(activator: TimetableProfileActivator): ScheduleRepository =
+        activator.scheduleRepository
+
+    @Provides
+    fun provideImportRepository(activator: TimetableProfileActivator): ImportRepository =
+        activator.importRepository
 
     @Provides
     @Singleton
-    fun provideRoomScheduleRepository(database: TimetableDatabase): RoomScheduleRepository =
-        RoomScheduleRepository(database)
-
-    @Provides fun provideScheduleRepository(repository: RoomScheduleRepository): ScheduleRepository = repository
-    @Provides fun provideImportRepository(repository: RoomScheduleRepository): ImportRepository = repository
-
-    @Provides
-    @Singleton
-    fun provideRoomNoticeAdjustmentRepository(database: TimetableDatabase): RoomNoticeAdjustmentRepository =
-        RoomNoticeAdjustmentRepository(database)
-
-    @Provides
-    fun provideNoticeAdjustmentRepository(repository: RoomNoticeAdjustmentRepository): NoticeAdjustmentRepository =
-        repository
+    fun provideNoticeAdjustmentRepository(activator: TimetableProfileActivator): NoticeAdjustmentRepository =
+        activator.noticeAdjustmentRepository
 
     @Provides
     @Singleton

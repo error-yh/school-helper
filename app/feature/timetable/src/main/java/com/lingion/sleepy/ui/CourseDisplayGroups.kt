@@ -98,16 +98,24 @@ private const val SIGNATURE_PLAIN_MAX = 400
  * so the binding stays bounded without truncating any field. Short identities keep the plain form,
  * so configurations written before this change stay readable.
  */
-internal fun courseDisplaySignature(course: ScheduledCourse): String {
-    val name = normalizedCourseName(course.courseName)
-    val code = normalizedSourceCode(course.sourceCourseCode).orEmpty()
-    val classCode = normalizedSourceCode(course.sourceClassCode).orEmpty()
+fun computeCourseDisplaySignature(
+    courseName: String,
+    sourceCourseCode: String?,
+    sourceClassCode: String?,
+): String {
+    val name = normalizedCourseName(courseName)
+    val code = normalizedSourceCode(sourceCourseCode).orEmpty()
+    val classCode = normalizedSourceCode(sourceClassCode).orEmpty()
     val plain = "$name|$code|$classCode"
     if (plain.length <= SIGNATURE_PLAIN_MAX) return plain
     val encoded = "${name.length}:$name|${code.length}:$code|${classCode.length}:$classCode"
     return "d1:" + MessageDigest.getInstance("SHA-256")
         .digest(encoded.toByteArray(Charsets.UTF_8))
         .joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+}
+
+internal fun courseDisplaySignature(course: ScheduledCourse): String {
+    return computeCourseDisplaySignature(course.courseName, course.sourceCourseCode, course.sourceClassCode)
 }
 
 /**
