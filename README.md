@@ -1,8 +1,8 @@
 # 校园助手 Android
 
-**[下载旧版 Debug 预览 APK](https://github.com/error-yh/school-helper/releases/download/pre-release-import-fixes-20261104/school-helper-arm-debug.apk)** · [版本说明及对应源码](https://github.com/error-yh/school-helper/releases/tag/pre-release-import-fixes-20261104)
+**[下载 v0.2.1 正式签名 APK](https://github.com/error-yh/school-helper/releases/download/v0.2.1/school-helper-v0.2.1.apk)** · [正式版说明、源码与校验文件](https://github.com/error-yh/school-helper/releases/tag/v0.2.1)
 
-当前源码对应已验收的正式签名 v0.2.1。上方下载是历史的 0.2.0 Debug 签名预发布版，约123.01 MiB。仅支持 ARM64/ARMv7，Android 8.0及以上。安装包位于 Releases 附件，绿色 Code 下载的是源码。APK 不包含运行时个人课表或账号；同签名、同包名的版本可覆盖升级。Debug 和正式版使用独立包名，课表通过「我的 → 课表数据备份与恢复」迁移。
+正式版支持 Android 8.0 及以上，包含 ARM64、ARMv7、x86 和 x86_64。同签名、同包名的版本可覆盖升级。Debug 和正式版使用独立包名，课表可通过「我的 → 课表数据备份与恢复」迁移。
 
 保留课表、快递、身份码、我的四个入口，以及手动单次调整、停课、补课、历史和受保护撤销。文字通知导入/调课界面已取消，如意邻里已移除；应用内原作者自动更新源关闭。
 
