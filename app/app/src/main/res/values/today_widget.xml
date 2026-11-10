@@ -10,11 +10,11 @@
     <string name="widget_soon">即将开始</string>
     <string name="widget_running">进行中</string>
     <color name="widget_surface">#FFF8EA</color>
-    <color name="widget_row_surface">#F5EDDE</color>
+    <color name="widget_divider">#E9E0D2</color>
     <color name="widget_text">#292721</color>
     <color name="widget_muted">#5F574A</color>
     <color name="widget_soon_text">#713B00</color>
-    <color name="widget_soon_surface">#FFE1AA</color>
+    <color name="widget_soon_surface">#F8EBD4</color>
     <color name="widget_running_text">#153C65</color>
-    <color name="widget_running_surface">#CFE5FE</color>
+    <color name="widget_running_surface">#E2EDF8</color>
 </resources>

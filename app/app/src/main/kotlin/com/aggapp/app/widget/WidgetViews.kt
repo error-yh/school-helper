@@ -66,8 +66,9 @@ private fun render(
         }
     } else {
         val spacious = height >= 155 && width >= 210
+        val rowHeight = if (spacious) ((height - 34) / rows.size).coerceIn(42, 53) else null
         for (row in rows) {
-            addView(R.id.widget_rows, renderRow(context, row, checkNotNull(snapshot).scopeToken, spacious))
+            addView(R.id.widget_rows, renderRow(context, row, checkNotNull(snapshot).scopeToken, rowHeight))
         }
     }
 }
@@ -76,13 +77,13 @@ private fun renderRow(
     context: Context,
     row: VisibleWidgetRow,
     scope: String,
-    spacious: Boolean,
+    rowHeight: Int?,
 ): RemoteViews = RemoteViews(context.packageName, R.layout.today_widget_row).apply {
     val occurrence = row.occurrence
     setInt(R.id.widget_course_color, "setBackgroundColor", occurrence.course.color.toInt() or 0xFF000000.toInt())
     setTextViewText(R.id.widget_course_name, occurrence.course.courseName.take(180))
     val room = occurrence.effectiveRoom.trim().takeIf { it.isNotEmpty() }
-    val teacher = occurrence.effectiveTeacher.trim().takeIf { it.isNotEmpty() && spacious }
+    val teacher = occurrence.effectiveTeacher.trim().takeIf { it.isNotEmpty() && rowHeight != null }
     val meta = listOfNotNull(room, teacher).joinToString(" · ").take(180)
     setTextViewText(R.id.widget_course_meta, meta)
     setViewVisibility(R.id.widget_course_meta, if (meta.isEmpty()) View.GONE else View.VISIBLE)
@@ -93,16 +94,11 @@ private fun renderRow(
     if (row.status != WidgetStatus.UPCOMING) {
         setTextViewText(R.id.widget_course_status, context.getString(if (isSoon) R.string.widget_soon else R.string.widget_running))
         setTextColor(R.id.widget_course_status, context.getColor(if (isSoon) R.color.widget_soon_text else R.color.widget_running_text))
-        setInt(R.id.widget_course_status, "setBackgroundColor",
-            context.getColor(if (isSoon) R.color.widget_soon_surface else R.color.widget_running_surface))
+        setInt(R.id.widget_course_status, "setBackgroundResource",
+            if (isSoon) R.drawable.today_widget_soon else R.drawable.today_widget_running)
     }
-    if (spacious) {
-        val padding = (5 * context.resources.displayMetrics.density).toInt()
-        setViewPadding(R.id.widget_course_content, padding, padding, padding, padding)
-        if (Build.VERSION.SDK_INT >= 31) {
-            setInt(R.id.widget_course_name, "setMaxLines", 2)
-            setViewLayoutHeight(R.id.widget_course_name, 32f, TypedValue.COMPLEX_UNIT_DIP)
-        }
+    if (rowHeight != null && Build.VERSION.SDK_INT >= 31) {
+        setViewLayoutHeight(R.id.widget_course_row, rowHeight.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
     }
     val key = TimetableOccurrenceKey(scope, occurrence.course.id, occurrence.meeting.id, occurrence.exception?.id)
     setOnClickPendingIntent(R.id.widget_course_row, WidgetLink.intent(context, TimetableOpenTarget(occurrence.date, key)))
