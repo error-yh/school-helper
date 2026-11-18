@@ -1,5 +1,7 @@
 package com.aggapp.app.ui
 
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aggapp.app.di.PlatformRegistry
@@ -16,6 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import javax.inject.Inject
 
 data class IdCodeUiState(
@@ -26,15 +30,25 @@ data class IdCodeUiState(
     val selected: Platform = Platform.SF,
     val countdownSec: Long? = null,
     val loading: Boolean = false,
+    val needCainiaoActivate: Boolean = false,
 )
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
     registry: PlatformRegistry,
     private val session: SessionRepository,
+    @ApplicationContext context: Context? = null,
 ) : ViewModel() {
 
     private val adapters: Map<Platform, PlatformAdapter> = registry.adapters
+    private val activationPrefs = context?.getSharedPreferences("idcode_prefs", Context.MODE_PRIVATE)
+    private val _countdown = MutableStateFlow<Long?>(null)
+    val countdown: StateFlow<Long?> = _countdown.asStateFlow()
+    fun dismissCainiaoActivate() { _state.update { it.copy(needCainiaoActivate = false) } }
+    fun neverShowCainiaoActivate() {
+        activationPrefs?.edit()?.putBoolean("hide_cainiao_activate", true)?.apply()
+        dismissCainiaoActivate()
+    }
 
     /** 有真实登录态返回凭据，否则 null（UI 提示未登录，不做 Mock 兜底） */
     private fun credentialFor(p: Platform): Credential? = session.credentials.value[p]
@@ -47,6 +61,7 @@ class MainViewModel @Inject constructor(
         val code: IdentityCode? = null,
         val isReal: Boolean = false,
         val needRelogin: Boolean = false,
+        val needActivate: Boolean = false,
     )
 
     /**
@@ -62,10 +77,10 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             if (!silent) _state.update { it.copy(loading = true) }
             val batchResults = mutableMapOf<Platform, PlatformBatchResult>()
-            for ((p, adapter) in adapters) {
+            coroutineScope { for ((p, adapter) in adapters) { launch {
                 val cred = credentialFor(p)
                 if (cred == null) {
-                    continue
+                    return@launch
                 }
                 try {
                     val code = adapter.fetchIdentityCode(cred)
@@ -82,10 +97,13 @@ class MainViewModel @Inject constructor(
                         isReal = false,
                         needRelogin = true,
                     )
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                } catch (e: PlatformError.NeedActivate) {
+                    batchResults[p] = PlatformBatchResult(cred, needActivate = true)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
                 }
-            }
+            } } }
 
             // 批次最终写入 state 前，重新核对各平台结果对应的发起凭据/会话版本。
             // 旧结果绝不能回填已退出账号，也不能覆盖新账号身份码；旧失败结果同样不能删除新账号码或标记其失效。
@@ -122,6 +140,8 @@ class MainViewModel @Inject constructor(
                     codes = newCodes,
                     isReal = newReal,
                     loading = false,
+                    needCainiaoActivate = current.needCainiaoActivate || (activationPrefs?.getBoolean("hide_cainiao_activate", false) != true &&
+                        batchResults.any { (p, res) -> res.needActivate && currentCreds[p] == res.requestCred }),
                     selected = current.selected,
                 )
             }
@@ -173,6 +193,7 @@ class MainViewModel @Inject constructor(
                         current.copy(
                             codes = current.codes - p,
                             isReal = current.isReal + (p to false),
+                            needCainiaoActivate = if (p == Platform.TAOBAO) false else current.needCainiaoActivate,
                         )
                     }
                 } else {
@@ -181,6 +202,7 @@ class MainViewModel @Inject constructor(
                         current.copy(
                             codes = current.codes - p,
                             isReal = current.isReal + (p to false),
+                            needCainiaoActivate = if (p == Platform.TAOBAO) false else current.needCainiaoActivate,
                         )
                     }
                     refreshOne(p)
@@ -195,9 +217,9 @@ class MainViewModel @Inject constructor(
 
     private fun tick() {
         val s = _state.value
-        val selected = s.codes[s.selected] ?: return
+        val selected = s.codes[s.selected] ?: run { _countdown.value = null; return }
         val remain = selected.expireAt?.let { (it - System.currentTimeMillis()) / 1000 }
-        _state.update { it.copy(countdownSec = remain?.coerceAtLeast(0)) }
+        _countdown.value = remain?.coerceAtLeast(0)
         if (remain != null && remain <= 0) {
             refreshOne(s.selected)
         }
@@ -239,8 +261,13 @@ class MainViewModel @Inject constructor(
                         current
                     }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (e: PlatformError.NeedActivate) {
+                if (credentialFor(platform) == cred && activationPrefs?.getBoolean("hide_cainiao_activate", false) != true) {
+                    _state.update { it.copy(needCainiaoActivate = true) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
             }
         }
     }

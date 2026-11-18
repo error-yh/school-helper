@@ -499,49 +499,9 @@ fun MineScreen(
 
             // 淘宝 iv 风控 WebView 弹窗（多账号收尾命中风控：用户手动过风控，
             // 检测到登录态 Cookie（cookie2/unb）出现后自动重试协议收尾并关闭）
-            if (state.tbRiskUrl != null) {
-                androidx.compose.material3.AlertDialog(
-                    onDismissRequest = { vm.tbDismissRiskCheck() },
-                    confirmButton = {
-                        TextButton(onClick = { vm.tbDismissRiskCheck() }) { Text("关闭") }
-                    },
-                    title = { Text("安全验证", Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center) },
-                    text = {
-                        androidx.compose.ui.viewinterop.AndroidView(
-                            modifier = Modifier.fillMaxWidth().height(420.dp),
-                            factory = { ctx ->
-                                android.webkit.WebView(ctx).apply {
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.userAgentString = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-                                    val cm = android.webkit.CookieManager.getInstance()
-                                    cm.setAcceptCookie(true)
-                                    // 预置会话 Cookie（保持服务端上下文）
-                                    state.tbWebviewCookies.forEach { (u, c) -> cm.setCookie(u, c) }
-                                    cm.flush()
-                                    val handler = android.os.Handler(android.os.Looper.getMainLooper())
-                                    val check = object : Runnable {
-                                        override fun run() {
-                                            val ck = cm.getCookie("https://www.taobao.com/") ?: ""
-                                            if (ck.contains("cookie2=") && ck.contains("unb=")) {
-                                                vm.tbRiskCheckPassed(ck)
-                                                return
-                                            }
-                                            handler.postDelayed(this, 1500)
-                                        }
-                                    }
-                                    webViewClient = object : android.webkit.WebViewClient() {
-                                        override fun onPageFinished(view: android.webkit.WebView, url: String) {
-                                            handler.postDelayed(check, 1500)
-                                        }
-                                    }
-                                    loadUrl(state.tbRiskUrl!!)
-                                    handler.postDelayed(check, 3000)
-                                }
-                            },
-                        )
-                    },
-                )
+            state.tbRiskUrl?.let { riskUrl ->
+                TaobaoRiskDialog(riskUrl, state.tbWebviewCookies,
+                    onPassed = { cookie -> vm.tbRiskCheckPassed(cookie, riskUrl) }, onDismiss = vm::tbDismissRiskCheck)
             }
 
             // 拼多多扫码登录弹窗（二维码展示 + 保存相册 + Text 二次验证原生输码）

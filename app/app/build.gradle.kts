@@ -30,8 +30,8 @@ android {
         applicationId = "io.github.schoolhelper.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.2.2"
+        versionCode = 5
+        versionName = "0.2.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         if (schoolHelperArmOnly) {
@@ -59,7 +59,9 @@ android {
         }
         debug {
             // 调试包独立包名，与 release 包共存（调试日志导出/全量请求日志仅 debug 包开启）
-            applicationIdSuffix = if (providers.gradleProperty("schoolHelperMigrationSafTarget").orNull == "true") {
+            applicationIdSuffix = if (providers.gradleProperty("schoolHelperExpressSandbox").orNull == "true") {
+                ".expresstest"
+            } else if (providers.gradleProperty("schoolHelperMigrationSafTarget").orNull == "true") {
                 ".migrationtest.target"
             } else if (providers.gradleProperty("schoolHelperMigrationSandbox").orNull == "true") {
                 ".migrationtest"

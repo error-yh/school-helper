@@ -79,9 +79,17 @@ class ExpressSessionIsolationTest {
     private val createdVms = mutableListOf<ExpressViewModel>()
 
     private fun createViewModel(registry: PlatformRegistry = PlatformRegistry(fakeAdapters)): ExpressViewModel {
-        val vm = ExpressViewModel(registry, session, testContext)
+        lateinit var vm: ExpressViewModel
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            vm = ExpressViewModel(registry, session, testContext)
+        }
         createdVms += vm
         return vm
+    }
+
+    private fun refreshOnMain(vm: ExpressViewModel, force: Boolean) {
+        // Match UI invocation: don't mistake a queued background call for a completed refresh.
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { vm.refresh(force) }
     }
 
     private fun clearPreferences() {
@@ -142,7 +150,7 @@ class ExpressSessionIsolationTest {
         session.upsert(cred)
 
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
 
         fetchStartedLatch.await()
         assertTrue("刷新进行中应处于 loading", vm.ui.value.loading)
@@ -196,7 +204,7 @@ class ExpressSessionIsolationTest {
         session.upsert(cred)
 
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
 
         fetchStartedLatch.await()
         assertTrue("请求进行中应处于 loading", vm.ui.value.loading)
@@ -270,13 +278,13 @@ class ExpressSessionIsolationTest {
         session.upsert(credA)
 
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
 
         aStartedLatch.await()
 
         val credB = Credential(Platform.SF, "token_B", emptyMap(), System.currentTimeMillis() + 1000)
         session.upsert(credB)
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
 
         waitForStateCondition(vm) { state ->
             state.stations.any { g -> g.items.any { it.trackingNo == "SF_NEW_B" } }
@@ -336,7 +344,7 @@ class ExpressSessionIsolationTest {
 
         val vm = createViewModel()
         // 1. 发起列表刷新
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         refreshStarted.await()
         assertTrue("刷新中 loading 应当为 true", vm.ui.value.loading)
         assertFalse("查单尚未发起 searching 应为 false", vm.ui.value.searching)
@@ -432,7 +440,7 @@ class ExpressSessionIsolationTest {
         session.upsert(sfCred)
 
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
 
         cancelStarted.await()
         waitForStateCondition(vm) { !it.loading }
@@ -477,7 +485,7 @@ class ExpressSessionIsolationTest {
         session.upsert(Credential(Platform.TAOBAO, "tb_token", emptyMap(), System.currentTimeMillis()))
 
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
 
         // 有界等待顺丰包裹完成借码：顺丰项借到了淘宝的码
         waitForStateCondition(vm) { state ->
@@ -543,13 +551,13 @@ class ExpressSessionIsolationTest {
 
         session.upsert(Credential(Platform.SF, "token_old", emptyMap(), System.currentTimeMillis()))
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
 
         sfStarted.await()
 
         // 用户切换为新 token
         session.upsert(Credential(Platform.SF, "token_new", emptyMap(), System.currentTimeMillis() + 1000))
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
 
         // 释放旧请求让其迟到返回
         sfRelease.complete(Unit)
@@ -588,7 +596,7 @@ class ExpressSessionIsolationTest {
         )
 
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
 
         val trackedAfter = prefs.getStringSet("tracked_nos", emptySet()).orEmpty()
@@ -633,13 +641,13 @@ class ExpressSessionIsolationTest {
             )
         )
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
 
         // 2. 正向验证：同一账号 A 下，当新一轮刷新列表中没有 SF_A_PROVEN 时，证明有效，会发起 fetchPickupCode
         sfAdapter.expressItemsToReturn = emptyList()
         sfAdapter.fetchPickupCodeCalls.clear()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
         assertTrue(
             "同一账号 A 下拥有有效证明，列表无此单时会向网络发起 fetchPickupCode",
@@ -650,7 +658,7 @@ class ExpressSessionIsolationTest {
         val credB = Credential(Platform.SF, "token_B_sf", emptyMap(), System.currentTimeMillis() + 1000)
         sfAdapter.fetchPickupCodeCalls.clear()
         session.upsert(credB)
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
 
         // 4. 负向验证：由于 A 账号证明已在换号时注销，B 账号刷新绝不得向网络查询 SF_A_PROVEN
@@ -698,14 +706,14 @@ class ExpressSessionIsolationTest {
         tbAdapter.expressItemsToReturn = emptyList()
 
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
 
         // 2. 第二轮刷新：顺丰列表清空（使顺丰同号不再存在于 byNo 中，不提前 continue），淘宝列表仍为空
         sfAdapter.expressItemsToReturn = emptyList()
         tbAdapter.fetchPickupCodeCalls.clear()
 
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
 
         // 3. 验证：由于 COMMON_SHARED_999 仅属于顺丰证明，淘宝绝无此证明，淘宝绝不得发起网络查询
@@ -765,7 +773,7 @@ class ExpressSessionIsolationTest {
 
         session.upsert(Credential(Platform.SF, "token_old_sf", emptyMap(), System.currentTimeMillis()))
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         sfStarted.await()
 
         // 换号为新 token
@@ -778,7 +786,7 @@ class ExpressSessionIsolationTest {
         sfAdapter.fetchPickupCodeCalls.clear()
 
         // 新会话发起刷新（此时顺丰返回空列表，但 tracked 中有 LATE_EXPIRED_NO|SF）
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
 
         // 验证：旧代次迟到返回因凭据不匹配被丢弃，绝未登记证明，新会话刷新不会网络查询该单
@@ -837,7 +845,7 @@ class ExpressSessionIsolationTest {
                 raw = null,
             )
         )
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
 
         // 3. 第二轮刷新：顺丰包裹列表为空，门闩挂在 fetchPickupCode("SF_TRACKED_X")
@@ -853,7 +861,7 @@ class ExpressSessionIsolationTest {
             }
         }
 
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         sfTrackedXStarted.await()
         assertTrue("顺丰刷新持有只含 X 的快照并在查询 X 期间挂起", vm.ui.value.loading)
 
@@ -892,20 +900,130 @@ class ExpressSessionIsolationTest {
         session.upsert(sfCred)
 
         val vm = createViewModel()
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading }
         val countAfterFirst = adapter.fetchCount
         assertTrue("初始刷新至少调用 1 次", countAfterFirst >= 1)
 
         // 30 秒内非 force 刷新，被节流
-        vm.refresh(force = false)
+        refreshOnMain(vm, force = false)
         delay(100)
         assertEquals("30秒内 force=false 被节流，调用次数不增加", countAfterFirst, adapter.fetchCount)
 
         // 30 秒内 force=true 刷新，绕过节流立即拉取
-        vm.refresh(force = true)
+        refreshOnMain(vm, force = true)
         waitForStateCondition(vm) { !it.loading && adapter.fetchCount > countAfterFirst }
         assertTrue("force=true 绕过节流立即发起拉取", adapter.fetchCount > countAfterFirst)
+    }
+
+    /** v0.2.3: a closed detail sheet cannot be repopulated by a non-cancellable old response. */
+    @Test(timeout = 10_000)
+    fun testDismissedDetailNeverReappears() = runBlocking {
+        val item = ExpressItem("SYNC-DETAIL", Platform.SF, "合成站点", trackingNo = "SYNC-DETAIL", pickupCode = "1-2-345")
+        val adapter = checkNotNull(fakeAdapters[Platform.SF])
+        adapter.expressItemsToReturn = listOf(item)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        adapter.customDetailHandler = { _, _ ->
+            started.complete(Unit)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
+            com.aggapp.core.model.ExpressDetail("SYNC-DETAIL", goodsName = "合成旧结果")
+        }
+        session.upsert(Credential(Platform.SF, "synthetic-detail-account", capturedAt = 1L))
+        val vm = createViewModel()
+        waitForStateCondition(vm) { it.stations.flatMap { group -> group.items }.isNotEmpty() }
+        vm.loadDetail(vm.ui.value.stations.first().items.first())
+        started.await()
+        vm.dismissDetail()
+        release.complete(Unit)
+        delay(200)
+        assertNull(vm.ui.value.detailFor)
+        assertNull(vm.ui.value.detail)
+        assertFalse(vm.ui.value.detailLoading)
+    }
+
+    @Test(timeout = 10_000)
+    fun testThreeSectionsAndPickedMarkerAreAccountScoped() = runBlocking {
+        val wait = ExpressItem("SYNC-WAIT", Platform.PDD, "合成站点", trackingNo = "SYNC-WAIT", pickupCode = "1-2-345")
+        val transit = wait.copy(id = "SYNC-TRANSIT", trackingNo = "SYNC-TRANSIT", status = ExpressStatus.IN_TRANSIT, pickupCode = null)
+        val picked = wait.copy(id = "SYNC-PICKED", trackingNo = "SYNC-PICKED", status = ExpressStatus.PICKED)
+        checkNotNull(fakeAdapters[Platform.PDD]).expressItemsToReturn = listOf(wait, transit, picked)
+        session.upsert(Credential(Platform.PDD, "synthetic-mark-account-a", capturedAt = 1L))
+        val vm = createViewModel()
+        waitForStateCondition(vm) { !it.loading && it.inTransit.isNotEmpty() && it.picked.isNotEmpty() }
+        assertEquals(1, vm.ui.value.stations.flatMap { it.items }.size)
+        vm.markPicked(vm.ui.value.stations.first().items.first())
+        assertEquals(2, vm.ui.value.picked.flatMap { it.items }.size)
+        session.upsert(Credential(Platform.PDD, "synthetic-mark-account-b", capturedAt = 2L))
+        waitForStateCondition(vm) { it.stations.isEmpty() && it.inTransit.isEmpty() && it.picked.isEmpty() }
+        refreshOnMain(vm, force = true)
+        waitForStateCondition(vm) { !it.loading && it.stations.isNotEmpty() }
+        assertEquals("SYNC-WAIT", vm.ui.value.stations.first().items.first().trackingNo)
+    }
+
+    @Test(timeout = 10_000)
+    fun testSmsReadIsExplicitAndPermissionDenialNeverQueriesProvider() = runBlocking {
+        var providerReads = 0
+        val noSmsContext = object : ContextWrapper(testContext) {
+            override fun checkPermission(permission: String, pid: Int, uid: Int): Int =
+                if (permission == android.Manifest.permission.READ_SMS) android.content.pm.PackageManager.PERMISSION_DENIED
+                else super.checkPermission(permission, pid, uid)
+            override fun getContentResolver(): android.content.ContentResolver {
+                providerReads++
+                throw AssertionError("SMS provider must not be queried")
+            }
+        }
+        val vm = ExpressViewModel(PlatformRegistry(fakeAdapters), session, noSmsContext)
+        createdVms += vm
+        refreshOnMain(vm, force = true)
+        delay(200)
+        assertEquals(0, providerReads)
+        vm.scanSms()
+        waitForStateCondition(vm) { !it.smsLoading && it.smsMessage != null }
+        assertEquals(0, providerReads)
+    }
+
+    @Test(timeout = 10_000)
+    fun testSharedLoginProbeCannotRepopulateLoggedOutSession() = runBlocking {
+        val adapter = checkNotNull(fakeAdapters[Platform.SF])
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        adapter.customAliveHandler = { started.complete(Unit); release.await(); true }
+        val old = Credential(Platform.SF, "synthetic-probe-account", capturedAt = 1L)
+        session.upsert(old)
+        val job = session.verifyAll(fakeAdapters, force = true)
+        started.await()
+        session.clear(Platform.SF)
+        release.complete(Unit)
+        job.join()
+        assertFalse(session.loginStates.value[Platform.SF]?.loggedIn == true)
+        assertNull(session.credentials.value[Platform.SF])
+    }
+
+    @Test(timeout = 10_000)
+    fun testMarkingUnaffectedPlatformCannotRebindOldAccountRowsOrBorrowedCodes() = runBlocking {
+        val sf = checkNotNull(fakeAdapters[Platform.SF])
+        val pdd = checkNotNull(fakeAdapters[Platform.PDD])
+        sf.expressItemsToReturn = listOf(ExpressItem("SYNC-SF-MARK", Platform.SF, "合成站点", trackingNo = "SYNC-SF-MARK"))
+        pdd.expressItemsToReturn = listOf(ExpressItem("SYNC-PDD-OLD", Platform.PDD, "合成站点", trackingNo = "SYNC-PDD-OLD", pickupCode = "PDD-321"))
+        pdd.pickupCodeToReturn = PickupCode("SYNC-SF-MARK", Platform.PDD, "FROM-A")
+        session.upsert(Credential(Platform.SF, "synthetic-sf-stable", capturedAt = 1L))
+        session.upsert(Credential(Platform.PDD, "synthetic-pdd-old", capturedAt = 1L))
+        val vm = createViewModel()
+        waitForStateCondition(vm) { !it.loading && it.stations.flatMap { g -> g.items }.any { row -> row.platform == Platform.SF && row.pickupCodeSource == Platform.PDD } }
+        val mark = vm.ui.value.stations.flatMap { it.items }.first { it.platform == Platform.SF }
+        // Delay delivery of the credential event deterministically; keep all assertions independent of collector timing.
+        val listener = ExpressViewModel::class.java.getDeclaredField("credentialsJob").apply { isAccessible = true }.get(vm) as kotlinx.coroutines.Job
+        listener.cancel()
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            session.upsert(Credential(Platform.PDD, "synthetic-pdd-new", capturedAt = 2L))
+            vm.markPicked(mark)
+        }
+        val rows = (vm.ui.value.stations + vm.ui.value.inTransit + vm.ui.value.picked).flatMap { it.items }
+        assertTrue("旧PDD账号行不得提升为新账号数据", rows.none { it.platform == Platform.PDD })
+        val kept = rows.single { it.platform == Platform.SF }
+        assertNull("旧账号借来的取件码必须清除", kept.pickupCode)
+        assertNull(kept.pickupCodeSource)
     }
 
     private suspend fun waitForStateCondition(
@@ -938,7 +1056,10 @@ class ExpressSessionIsolationTest {
         override val loginMode = LoginMode.REMOTE_SERVICE
         override fun loginUrl(): String = ""
         override fun detectLoginSuccess(req: CapturedRequest, cookies: Map<String, String>): Credential? = null
-        override suspend fun checkAlive(cred: Credential): Boolean = true
+        var customAliveHandler: (suspend (Credential) -> Boolean)? = null
+        var customDetailHandler: (suspend (Credential, ExpressItem) -> com.aggapp.core.model.ExpressDetail?)? = null
+        override suspend fun fetchDetail(cred: Credential, item: ExpressItem): com.aggapp.core.model.ExpressDetail? = customDetailHandler?.invoke(cred, item)
+        override suspend fun checkAlive(cred: Credential): Boolean = customAliveHandler?.invoke(cred) ?: true
 
         override suspend fun fetchExpressList(cred: Credential, page: Int): List<ExpressItem> {
             fetchCount++

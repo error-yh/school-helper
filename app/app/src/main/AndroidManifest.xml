@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Only requested when the user taps “从短信提取取件码”. No startup/background inbox scan. -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 

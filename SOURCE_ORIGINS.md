@@ -1,5 +1,7 @@
 # 来源及修改
 
+2026-11-17 快递增量同步：上游由 njpemo/mashangqu 迁移至 [njpemo/MaShangQu-APP](https://github.com/njpemo/MaShangQu-APP)，固定提交 f24fa4bf7022865aa1b2b8829a7f5ffd5bcaf4b5，包含 v1.0.10 与淘宝二次风控修复。按模型、三方平台、快递UI/详情、短信提取和条码功能适配，保留校园助手账号隔离、导航及数据库边界；未整仓覆盖。上游此提交 LICENSE 仍为 MIT，README 描述存在非商用限制，保留原许可与署名，公开发布前需审阅该文本差异。详细边界与验证见 docs/releases/v0.2.3.md。
+
 - 宿主 njpemo/mashangqu，固定e5245ed6a7cbc5a60b139dc4d9acda23b13bc2a9，MIT。
 - 课表参考 lingion/sleepy，固定3dafa110f74ac4f32464ce1efddb24197a4091d9，GPL-3.0。
 - 离线OCR源码/模型 hzkitty/RapidOCR4j-Android，固定8e11959786c0fe609c68f4b133ee3210940a0df8；其RapidOCR/PaddleOCR/Clipper/OpenCV/ONNX完整许可随模块assets保留。

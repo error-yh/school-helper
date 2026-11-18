@@ -11,3 +11,5 @@
 未来分发APK时，须在同一Release提供该版本完整对应源码、构建说明、必要脚本/资源及许可；仅提供原仓库地址不足。阶段1没有发布APK，正式签名/自有更新源未启用，未配置签名的Release构建拒绝执行。原作者名称不表示对校园助手的认可。
 
 阶段3 PDF提取依赖（2026-10-24）：com.tom-roush:pdfbox-android:2.0.27.0，Apache-2.0。固定上游 https://github.com/TomRoush/PdfBox-Android/tree/v2.0.27.0 。许可及附带第三方条款完整保存在LICENSES/Apache-2.0-pdfbox-android.txt，原NOTICE保存在LICENSES/NOTICE-pdfbox-android.txt；APK assets/open_source亦附带两份完整文本。仅提取文字坐标，不执行PDF动作、附件或外部链接。新增解析器代码为校园助手贡献者原创，不复制上游解析器实现。
+
+2026-11-18 快递同步：迁移后的上游 https://github.com/njpemo/MaShangQu-APP，固定 f24fa4bf7022865aa1b2b8829a7f5ffd5bcaf4b5。新增三分区、详情、短信显式提取与条码/风控适配，保留校园助手会话隔离和数据架构。MIT原文与原作者署名保留；上游README许可描述差异见SOURCE_ORIGINS.md。

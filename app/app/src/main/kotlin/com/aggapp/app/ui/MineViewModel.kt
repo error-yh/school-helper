@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
 data class MineUiState(
@@ -72,39 +73,20 @@ class MineViewModel @Inject constructor(
 
     /** 淘宝协议登录的中间态（adapter 单例内暂存，这里只记录已发送） */
     private var smsPhone: String = ""
+    private var tbRiskGeneration = 0L
 
     /** 顺丰短信登录的中间态手机号（会话 suuid 由 adapter 单例内暂存） */
     private var sfPhone: String = ""
 
     init {
         session.restore()
-        refreshLoginStates()
+        viewModelScope.launch { session.loginStates.collect { states ->
+            _state.value = _state.value.copy(loginStates = states)
+        } }
+        session.verifyAll(adapters)
     }
 
-    fun refreshLoginStates() {
-        viewModelScope.launch {
-            val creds = session.credentials.value
-            val states = Platform.activePlatforms.associateWith { p ->
-                val cred = creds[p]
-                if (cred == null) {
-                    PlatformLoginState(p, loggedIn = false)
-                } else {
-                    val alive = try {
-                        adapters.getValue(p).checkAlive(cred)
-                    } catch (e: Exception) {
-                        false
-                    }
-                    PlatformLoginState(
-                        p,
-                        loggedIn = alive,
-                        needRelogin = !alive,
-                        lastCheckAt = System.currentTimeMillis(),
-                    )
-                }
-            }
-            _state.value = _state.value.copy(loginStates = states)
-        }
-    }
+    fun refreshLoginStates() { session.verifyAll(adapters, force = true) }
 
     // ---------- WebView 短信登录（拼多多，去 YYB） ----------
 
@@ -127,6 +109,7 @@ class MineViewModel @Inject constructor(
     // ---------- 淘宝：短信登录 ----------
 
     fun sendTaobaoSms(phone: String) {
+        tbRiskGeneration++
         if (phone.length != 11) {
             _state.value = _state.value.copy(message = "请输入 11 位手机号")
             return
@@ -488,6 +471,7 @@ class MineViewModel @Inject constructor(
     /** 进入淘宝 iv 风控/身份验证流程：WebView 弹窗打开验证页，预置会话 Cookie；
      *  用户放行后（WebView 出现 cookie2/unb）tbRiskCheckPassed 合并 Cookie 收尾 */
     private fun enterTbRiskCheck(url: String) {
+        tbRiskGeneration++
         val adapter = adapters.getValue(Platform.TAOBAO) as com.aggapp.platform.taobao.TaobaoAdapter
         val header = adapter.loginCookieHeader
         val cookies = header.split("; ").filter { it.contains("=") }
@@ -497,23 +481,32 @@ class MineViewModel @Inject constructor(
 
     /** 风控 WebView 检测到放行（出现 cookie2/unb 登录态 Cookie）→ 合并 Cookie 直接收尾
      *  （登录已在 WebView 内完成，contextToken 已消费，不能重试 selectAccount） */
-    fun tbRiskCheckPassed(webviewCookieHeader: String) {
+    fun tbRiskCheckPassed(webviewCookieHeader: String, expectedRiskUrl: String? = null) {
         if (_state.value.tbRiskUrl == null) return
+        if (expectedRiskUrl != null && _state.value.tbRiskUrl != expectedRiskUrl) return
+        val generation = ++tbRiskGeneration
+        val beforeCredential = session.credentials.value[Platform.TAOBAO]
+        // Synchronous gate: multiple WebView callbacks must not consume the login session twice.
+        _state.value = _state.value.copy(tbRiskUrl = null, busy = true, message = null)
         viewModelScope.launch {
             _state.value = _state.value.copy(busy = true, message = null)
             try {
                 val adapter = adapters.getValue(Platform.TAOBAO) as com.aggapp.platform.taobao.TaobaoAdapter
                 val cred = adapter.completeRiskCheck(webviewCookieHeader)
+                if (generation != tbRiskGeneration || session.credentials.value[Platform.TAOBAO] != beforeCredential) return@launch
                 session.upsert(cred)
                 _state.value = _state.value.copy(
                     busy = false, tbRiskUrl = null, tbWebviewCookies = emptyList(), message = "淘宝登录成功",
                 )
                 refreshLoginStates()
-            } catch (e: Exception) {
-                AppLog.e("AggApp", "taobao risk check complete failed", e)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                if (generation != tbRiskGeneration) return@launch
+                AppLog.e("AggApp", "taobao risk check complete failed")
                 _state.value = _state.value.copy(
                     busy = false, tbRiskUrl = null, tbWebviewCookies = emptyList(),
-                    message = "淘宝登录失败：${e.message}（可重新发送验证码）",
+                    message = "淘宝验证未完成，请重新发送验证码后重试",
                 )
             }
         }
@@ -521,6 +514,7 @@ class MineViewModel @Inject constructor(
 
     /** 关闭风控 WebView 弹窗（放弃本次登录） */
     fun tbDismissRiskCheck() {
+        tbRiskGeneration++
         _state.value = _state.value.copy(tbRiskUrl = null, tbWebviewCookies = emptyList(), message = "已取消，可重新发送验证码")
     }
 
@@ -737,6 +731,10 @@ class MineViewModel @Inject constructor(
     }
 
     fun logout(platform: Platform) {
+        if (platform == Platform.TAOBAO) {
+            tbRiskGeneration++
+            _state.value = _state.value.copy(tbRiskUrl = null, tbWebviewCookies = emptyList(), busy = false)
+        }
         session.clear(platform)
         refreshLoginStates()
     }

@@ -22,12 +22,29 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.aggapp.core.model.ExpressDetail
+import com.aggapp.app.sms.SmsCodeExtractor
+import java.security.MessageDigest
 
 /** 快递页 UI 状态 */
 data class ExpressUiState(
     val loading: Boolean = false,
     val loggedInPlatforms: Set<Platform> = emptySet(),
     val stations: List<StationGroup> = emptyList(),   // 按驿站分组
+    val inTransit: List<StationGroup> = emptyList(),
+    val picked: List<StationGroup> = emptyList(),
+    val tab: ExpressTab = ExpressTab.WAIT,
+    val detailFor: ExpressItem? = null,
+    val detail: ExpressDetail? = null,
+    val detailLoading: Boolean = false,
+    val detailError: String? = null,
+    val smsPickups: List<SmsCodeExtractor.SmsPickup> = emptyList(),
+    val smsPickedIds: Set<String> = emptySet(),
+    val smsLoading: Boolean = false,
+    val smsMessage: String? = null,
     val error: String? = null,
     // 运单号查询
     val searching: Boolean = false,
@@ -55,6 +72,15 @@ class ExpressViewModel @Inject constructor(
     @ApplicationContext context: Context,
 ) : ViewModel() {
 
+    private val appContext = context
+    private var detailGeneration = 0L
+    private var detailJob: Job? = null
+    private var smsJob: Job? = null
+    private val detailCache = ExpressDetailCache()
+    @Volatile private var displayedCredentials: Map<Platform, Credential> = emptyMap()
+    @Volatile private var refreshRequestCredentials: Map<Platform, Credential> = emptyMap()
+    @Volatile private var searchRequestCredentials: Map<Platform, Credential> = emptyMap()
+    @Volatile private var detailRequestCredential: Credential? = null
     private val adapters = registry.adapters
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -77,7 +103,7 @@ class ExpressViewModel @Inject constructor(
     private data class ProvenOwnership(
         val waybill: String,
         val platform: Platform,
-        val token: String,
+        val credential: Credential,
     )
 
     /** 内存中已证明归属有效会话/凭据的单号证明集合（绑定单号、平台与当前凭据） */
@@ -85,10 +111,11 @@ class ExpressViewModel @Inject constructor(
 
     private fun isProvenForCurrentSession(no: String, platform: Platform): Boolean {
         val cred = sessionRepo.credentials.value[platform] ?: return false
-        return provenOwnerships.contains(ProvenOwnership(no, platform, cred.token))
+        return provenOwnerships.contains(ProvenOwnership(no, platform, cred))
     }
 
     init {
+        sessionRepo.verifyAll(adapters)
         credentialsJob = viewModelScope.launch {
             var previousCreds = sessionRepo.credentials.value
             sessionRepo.credentials.collect { newCreds ->
@@ -98,10 +125,13 @@ class ExpressViewModel @Inject constructor(
                 }
             }
         }
+        loadSmsPickups()
         refresh(force = true)
     }
 
     public override fun onCleared() {
+        detailJob?.cancel()
+        smsJob?.cancel()
         credentialsJob?.cancel()
         refreshJob?.cancel()
         searchJob?.cancel()
@@ -131,15 +161,20 @@ class ExpressViewModel @Inject constructor(
             }
         }
         if (changedPlatforms.isEmpty()) return
+        val stalePlatforms = changedPlatforms.filter { displayedCredentials[it] != newCreds[it] }.toSet()
+        val cancelRefresh = changedPlatforms.any { refreshRequestCredentials[it] != newCreds[it] }
+        val cancelSearch = changedPlatforms.any { searchRequestCredentials[it] != newCreds[it] }
+        val cancelDetail = detailRequestCredential?.let { newCreds[it.platform] != it } == true
+        if (cancelDetail) { detailJob?.cancel(); detailGeneration++; detailRequestCredential = null }
+        detailCache.clear(changedPlatforms)
+        displayedCredentials = displayedCredentials - stalePlatforms
 
         // 1. 取消正在执行的刷新和查询任务，使旧代次彻底失效
-        refreshJob?.cancel()
-        searchJob?.cancel()
-        val curRefreshGen = ++refreshGeneration
-        val curSearchGen = ++searchGeneration
+        if (cancelRefresh) { refreshJob?.cancel(); refreshGeneration++ }
+        if (cancelSearch) { searchJob?.cancel(); searchGeneration++ }
 
         // 清除凭据发生变动或注销平台的所有归属证明
-        provenOwnerships.removeAll { it.platform in changedPlatforms }
+        provenOwnerships.removeAll { it.platform in changedPlatforms && it.credential != newCreds[it.platform] }
 
         // 2. 状态所有权清理与派生来源清除
         _ui.update { current ->
@@ -148,11 +183,11 @@ class ExpressViewModel @Inject constructor(
             }.toSet()
 
             // 清除属于变动平台的包裹，并对借码来源属于变动平台的包裹清除派生码
-            val updatedStations = current.stations.mapNotNull { group ->
+            fun sanitize(groups: List<StationGroup>) = groups.mapNotNull { group ->
                 val remainingItems = group.items.mapNotNull { item ->
-                    if (item.platform in changedPlatforms) {
+                    if (item.platform in stalePlatforms) {
                         null // 主平台凭据已变/登出：彻底移除该包裹
-                    } else if (item.pickupCodeSource in changedPlatforms) {
+                    } else if (item.pickupCodeSource in stalePlatforms) {
                         // 主平台保留，但取件码借自变动平台：保留包裹但安全清除派生取件码
                         item.copy(pickupCode = null, pickupCodeSource = null)
                     } else {
@@ -163,13 +198,19 @@ class ExpressViewModel @Inject constructor(
             }
 
             current.copy(
-                loading = false, // 登出/换号明确复位 loading，不留死锁
-                searching = false, // 登出/换号明确复位 searching
+                loading = if (cancelRefresh) false else current.loading,
+                searching = if (cancelSearch) false else current.searching,
                 loggedInPlatforms = loggedIn,
-                stations = updatedStations,
-                searchResult = null, // 清除可见旧查询结果
-                searchNotice = null, // 清除包含旧单号的提示
-                needSuffixFor = null, // 清除尾号输入态
+                stations = sanitize(current.stations),
+                inTransit = sanitize(current.inTransit),
+                picked = sanitize(current.picked),
+                detailFor = if (cancelDetail) null else current.detailFor,
+                detail = if (cancelDetail) null else current.detail,
+                detailLoading = if (cancelDetail) false else current.detailLoading,
+                detailError = if (cancelDetail) null else current.detailError,
+                searchResult = if (cancelSearch) null else current.searchResult,
+                searchNotice = if (cancelSearch) null else current.searchNotice,
+                needSuffixFor = if (cancelSearch) null else current.needSuffixFor,
                 error = if (loggedIn.isEmpty()) "请先在「我的」页登录顺丰/淘宝（短信验证码）/拼多多" else null,
             )
         }
@@ -190,11 +231,16 @@ class ExpressViewModel @Inject constructor(
      *              全部失败保留旧列表不弹错）
      */
     fun refresh(force: Boolean = false) {
+        // Serialize job ownership with credential collection and result publication on Main.
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            viewModelScope.launch { refresh(force) }
+            return
+        }
         val now = System.currentTimeMillis()
         if (!force && now - lastRefreshAt < 30_000) return
         lastRefreshAt = now
 
-        val silent = !force && _ui.value.stations.isNotEmpty()
+        val silent = !force && (_ui.value.stations + _ui.value.inTransit + _ui.value.picked).isNotEmpty()
         val creds = sessionRepo.credentials.value
         val loggedIn = creds.keys.filter {
             it == Platform.SF || it == Platform.TAOBAO || it == Platform.PDD
@@ -205,12 +251,13 @@ class ExpressViewModel @Inject constructor(
                     loading = false,
                     error = "请先在「我的」页登录顺丰/淘宝（短信验证码）/拼多多",
                     loggedInPlatforms = emptySet(),
-                    stations = emptyList(),
+                    stations = emptyList(), inTransit = emptyList(), picked = emptyList(),
                 )
             }
             return
         }
 
+        refreshRequestCredentials = creds
         val currentGen = ++refreshGeneration
         refreshJob?.cancel()
 
@@ -230,39 +277,48 @@ class ExpressViewModel @Inject constructor(
                 currentCoroutineContext().ensureActive()
                 val errors = mutableListOf<Pair<Platform, String>>()
                 val allItems = mutableListOf<ExpressItem>()
-                val byNo = mutableMapOf<String, ExpressItem>()
+                val byNo = mutableMapOf<Pair<Platform, String>, ExpressItem>()
                 val platformFetchedItems = mutableMapOf<Platform, List<ExpressItem>>()
 
-                for (platform in listOf(Platform.SF, Platform.TAOBAO, Platform.PDD)) {
+                coroutineScope { for (platform in listOf(Platform.SF, Platform.TAOBAO, Platform.PDD)) { launch {
                     currentCoroutineContext().ensureActive()
-                    val cred = creds[platform] ?: continue
+                    val cred = creds[platform] ?: return@launch
                     try {
                         val items = mutableListOf<ExpressItem>()
                         for (page in 1..MAX_PAGES) {
                             currentCoroutineContext().ensureActive()
                             val batch = adapters.getValue(platform).fetchExpressList(cred, page)
-                            items += batch
+                            items += batch.filter { it.platform == platform }
                             if (batch.size < PAGE_SIZE) break
                         }
                         for (item in items) {
                             val no = item.trackingNo
                             if (no != null) {
-                                byNo[no] = item // 全量索引（含签收，供跟踪状态判断）
+                                byNo[platform to no] = item // 全量索引（含签收，供跟踪状态判断）
                             }
                         }
                         allItems += items
                         platformFetchedItems[platform] = items
+                        if (refreshGeneration == currentGen && sessionRepo.credentials.value == creds) {
+                            val partial = listOf(Platform.SF, Platform.TAOBAO, Platform.PDD).flatMap { p -> platformFetchedItems[p].orEmpty() }
+                            _ui.update { current ->
+                                val retained = retainForSession((current.stations + current.inTransit + current.picked)
+                                    .flatMap { it.items }.filter { it.platform !in platformFetchedItems }, creds)
+                                present(current, ExpressListRules.deduplicate(partial + retained), creds)
+                                    .copy(loading = !silent && partial.isEmpty() && retained.isEmpty())
+                            }
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        errors += (platform to "${platformLabel(platform)}：${e.message}")
+                        errors += (platform to "${platformLabel(platform)}：暂时无法获取包裹，请稍后重试")
                     }
-                }
+                } } }
 
                 currentCoroutineContext().ensureActive()
 
                 // ① 跨平台运单号去重：同一单多平台各有一份 → 合并为一条（有码优先、字段互补）
-                val deduped = dedupeByTrackingNo(allItems.filter { it.status == ExpressStatus.WAIT_PICKUP })
+                val deduped = dedupeByTrackingNo(listOf(Platform.SF, Platform.TAOBAO, Platform.PDD).flatMap { platformFetchedItems[it].orEmpty() })
 
                 // ② 无码待取件：互补补码（内部在持久化前做代次核验）
                 val completed = backfillPickupCodes(deduped, creds, currentGen)
@@ -292,7 +348,7 @@ class ExpressViewModel @Inject constructor(
                         continue
                     }
 
-                    val inList = byNo[no]
+                    val inList = byNo[plat to no]
                     if (inList != null && inList.status == ExpressStatus.PICKED) {
                         pickedTrackedToRemove.add(no)
                         continue
@@ -353,7 +409,7 @@ class ExpressViewModel @Inject constructor(
                         val curCred = currentCreds[platform] ?: continue
                         for (item in items) {
                             val no = item.trackingNo ?: continue
-                            provenOwnerships.add(ProvenOwnership(no, platform, curCred.token))
+                            provenOwnerships.add(ProvenOwnership(no, platform, curCred))
                         }
                     }
                 }
@@ -401,7 +457,7 @@ class ExpressViewModel @Inject constructor(
                     }.map { it.second }
 
                     val finalStations = if (silent && validGroups.isEmpty() && validErrors.isNotEmpty()) {
-                        current.stations
+                        grouped(retainForSession((current.stations + current.inTransit + current.picked).flatMap { it.items }, currentCreds))
                     } else {
                         validGroups
                     }
@@ -414,11 +470,7 @@ class ExpressViewModel @Inject constructor(
                         null
                     }
 
-                    current.copy(
-                        loading = false,
-                        stations = finalStations,
-                        error = finalError,
-                    )
+                    present(current, finalStations.flatMap { it.items }, creds).copy(loading = false, error = finalError)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -432,29 +484,7 @@ class ExpressViewModel @Inject constructor(
     }
 
     /** 跨平台运单号去重：同号多平台仅保留一条（保持首次出现顺序） */
-    private fun dedupeByTrackingNo(items: List<ExpressItem>): List<ExpressItem> {
-        val byNo = linkedMapOf<String, ExpressItem>()
-        for (item in items) {
-            val no = item.trackingNo ?: continue
-            val exist = byNo[no]
-            byNo[no] = if (exist == null) item else mergeDuplicate(exist, item)
-        }
-        return byNo.values.toList()
-    }
-
-    /** 同单合并：有取件码者优先为主体；站点/地址/码/描述互补，入仓时间取更早者 */
-    private fun mergeDuplicate(a: ExpressItem, b: ExpressItem): ExpressItem {
-        val main = if (a.pickupCode != null) a else b
-        val other = if (main === a) b else a
-        return main.copy(
-            station = main.station.ifBlank { other.station },
-            stationAddress = main.stationAddress ?: other.stationAddress,
-            pickupCode = main.pickupCode ?: other.pickupCode,
-            pickupCodeSource = main.pickupCodeSource ?: other.pickupCodeSource,
-            summary = main.summary ?: other.summary,
-            arrivedAt = listOfNotNull(main.arrivedAt, other.arrivedAt).minOrNull(),
-        )
-    }
+    private fun dedupeByTrackingNo(items: List<ExpressItem>): List<ExpressItem> = ExpressListRules.deduplicate(items)
 
     /**
      * 无码待取件互补查询：
@@ -471,7 +501,7 @@ class ExpressViewModel @Inject constructor(
         for (item in items) {
             currentCoroutineContext().ensureActive()
             val no = item.trackingNo
-            if (no == null || !item.pickupCode.isNullOrBlank()) {
+            if (item.status != ExpressStatus.WAIT_PICKUP || no == null || !item.pickupCode.isNullOrBlank()) {
                 out += item
                 continue
             }
@@ -515,7 +545,7 @@ class ExpressViewModel @Inject constructor(
     private fun addTracked(no: String, plat: Platform) {
         val cred = sessionRepo.credentials.value[plat]
         if (cred != null) {
-            provenOwnerships.add(ProvenOwnership(no, plat, cred.token))
+            provenOwnerships.add(ProvenOwnership(no, plat, cred))
         }
         val current = _tracked.value
         if (current[no] == plat) return
@@ -558,6 +588,7 @@ class ExpressViewModel @Inject constructor(
         if (no.isEmpty()) return
 
         val creds = sessionRepo.credentials.value
+        searchRequestCredentials = creds
         val currentGen = ++searchGeneration
         searchJob?.cancel()
 
@@ -671,6 +702,7 @@ class ExpressViewModel @Inject constructor(
             return
         }
 
+        searchRequestCredentials = sessionRepo.credentials.value
         val currentGen = ++searchGeneration
         searchJob?.cancel()
 
@@ -727,6 +759,129 @@ class ExpressViewModel @Inject constructor(
         Platform.PDD -> "拼多多"
         Platform.RYLL -> "如意邻里"
     }
+
+
+    fun setTab(tab: ExpressTab) { _ui.update { it.copy(tab = tab) } }
+
+    private fun grouped(items: List<ExpressItem>): List<StationGroup> = items.groupBy { it.station.ifBlank { "未知驿站" } }
+        .map { (station, rows) -> StationGroup(station, rows) }
+
+    private fun overrideKey(item: ExpressItem): String? {
+        val credential = sessionRepo.credentials.value[item.platform] ?: return null
+        val identity = buildString {
+            append(credential.platform.name); append('\u0000'); append(credential.token)
+            credential.extra.toSortedMap().forEach { (k, v) -> append('\u0000'); append(k.length); append(':'); append(k); append(v.length); append(':'); append(v) }
+        }
+        val digest = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray()).joinToString("") { "%02x".format(it) }
+        return "picked_overrides_$digest"
+    }
+
+    private fun present(
+        current: ExpressUiState,
+        rows: List<ExpressItem>,
+        sourceCredentials: Map<Platform, Credential> = displayedCredentials,
+    ): ExpressUiState {
+        val active = sessionRepo.credentials.value
+        // A local action cannot promote rows or borrowed codes from an earlier session.
+        val safeRows = retainForSession(rows, active, sourceCredentials)
+        displayedCredentials = active
+        val marked = safeRows.map { item ->
+            val key = overrideKey(item)
+            val picked = key?.let { prefs.getStringSet(it, emptySet()).orEmpty() }.orEmpty()
+            val no = item.trackingNo ?: item.id
+            if (picked.any { it.substringBeforeLast('|') == no }) item.copy(status = ExpressStatus.PICKED) else item
+        }
+        val split = ExpressListRules.partition(marked)
+        return current.copy(stations = grouped(split.waiting), inTransit = grouped(split.transit), picked = grouped(split.picked))
+    }
+
+    private fun retainForSession(
+        rows: List<ExpressItem>,
+        current: Map<Platform, Credential>,
+        displayed: Map<Platform, Credential> = displayedCredentials,
+    ): List<ExpressItem> {
+        return rows.mapNotNull { item ->
+            if (current[item.platform] == null || displayed[item.platform] != current[item.platform]) null
+            else if (item.pickupCodeSource != null && displayed[item.pickupCodeSource] != current[item.pickupCodeSource])
+                item.copy(pickupCode = null, pickupCodeSource = null)
+            else item
+        }
+    }
+
+    fun markPicked(item: ExpressItem) {
+        if (displayedCredentials[item.platform] != sessionRepo.credentials.value[item.platform]) return
+        val current = _ui.value
+        val rows = (current.stations + current.inTransit + current.picked).flatMap { it.items }
+        if (rows.none { it == item }) return
+        val key = overrideKey(item) ?: return
+        val no = item.trackingNo ?: item.id
+        val records = prefs.getStringSet(key, emptySet()).orEmpty().filterNot { it.substringBeforeLast('|') == no }
+        val updated = (records + "$no|${System.currentTimeMillis()}").sortedByDescending { it.substringAfterLast('|').toLongOrNull() ?: 0L }.take(200).toSet()
+        prefs.edit().putStringSet(key, updated).apply()
+        _ui.update { present(it, (it.stations + it.inTransit + it.picked).flatMap { group -> group.items }) }
+    }
+
+    fun loadDetail(item: ExpressItem) {
+        val current = _ui.value
+        if ((current.stations + current.inTransit + current.picked).flatMap { it.items }.none { it == item }) return
+        val credential = sessionRepo.credentials.value[item.platform] ?: return
+        if (displayedCredentials[item.platform] != credential) return
+        detailRequestCredential = credential
+        val generation = ++detailGeneration
+        detailJob?.cancel()
+        _ui.update { it.copy(detailFor = item, detail = null, detailLoading = true, detailError = null) }
+        detailJob = viewModelScope.launch {
+            try {
+                val now = System.currentTimeMillis()
+                val detail = detailCache.get(credential, item, now) ?: adapters.getValue(item.platform).fetchDetail(credential, item)
+                currentCoroutineContext().ensureActive()
+                if (generation != detailGeneration || sessionRepo.credentials.value[item.platform] != credential || _ui.value.detailFor != item) return@launch
+                if (detail != null && item.trackingNo != null && detail.trackingNo != item.trackingNo) {
+                    _ui.update { it.copy(detailLoading = false, detailError = "详情与所选包裹不匹配，请重新查询") }
+                    return@launch
+                }
+                if (detail != null) detailCache.put(credential, item, detail, now)
+                _ui.update { it.copy(detailLoading = false, detail = detail, detailError = if (detail == null) "暂无物流详情，可稍后重试" else null) }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                if (generation == detailGeneration && sessionRepo.credentials.value[item.platform] == credential) {
+                    _ui.update { it.copy(detailLoading = false, detailError = "物流详情查询失败，请稍后重试") }
+                }
+            }
+        }
+    }
+
+    fun dismissDetail() {
+        detailRequestCredential = null
+        detailGeneration++
+        detailJob?.cancel()
+        _ui.update { it.copy(detailFor = null, detail = null, detailLoading = false, detailError = null) }
+    }
+
+    fun loadSmsPickups() {
+        viewModelScope.launch {
+            val rows = withContext(Dispatchers.IO) { SmsCodeExtractor.loadAll(appContext) }
+            _ui.update { it.copy(smsPickups = rows, smsPickedIds = SmsCodeExtractor.pickedIds(appContext)) }
+        }
+    }
+
+    /** No caller in refresh/init: only the explicit SMS button reaches the inbox scanner. */
+    fun scanSms() {
+        if (smsJob?.isActive == true) return
+        _ui.update { it.copy(smsLoading = true, smsMessage = null) }
+        smsJob = viewModelScope.launch {
+            try {
+                val result = SmsCodeExtractor.scanAndMerge(appContext)
+                currentCoroutineContext().ensureActive()
+                _ui.update { it.copy(smsMessage = result.fold({ count -> "已读取近三天短信，新增 $count 条取件信息" }, { "无法读取短信，请检查权限后重试" })) }
+                loadSmsPickups()
+            } finally { _ui.update { it.copy(smsLoading = false) } }
+        }
+    }
+
+    fun dismissSmsMessage() { _ui.update { it.copy(smsMessage = null) } }
+    fun markSmsPicked(id: String) { SmsCodeExtractor.markPicked(appContext, id); loadSmsPickups() }
+    fun deleteSmsPickup(id: String) { SmsCodeExtractor.delete(appContext, id); loadSmsPickups() }
 
     companion object {
         const val PREFS_NAME = "express_tracked"
